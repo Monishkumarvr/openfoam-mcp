@@ -73,7 +73,20 @@ class OpenFOAMFieldParser:
             if time is None:
                 raise ValueError("No time directories found in case")
 
-        field_path = self.case_dir / str(time) / field_name
+        # Handle time formatting: OpenFOAM uses "0" for t=0, but keeps decimals for other times
+        # Try to find the actual directory name
+        time_str = str(int(time)) if time == 0.0 else str(time)
+        field_path = self.case_dir / time_str / field_name
+
+        # If not found, try alternative formatting
+        if not field_path.exists() and time != 0.0:
+            # Try without trailing .0
+            if str(time).endswith('.0'):
+                alt_time_str = str(int(time))
+                alt_field_path = self.case_dir / alt_time_str / field_name
+                if alt_field_path.exists():
+                    field_path = alt_field_path
+                    time_str = alt_time_str
 
         if not field_path.exists():
             raise FileNotFoundError(f"Field file not found: {field_path}")
@@ -118,7 +131,17 @@ class OpenFOAMFieldParser:
         if time is None:
             time = self.get_latest_time()
 
-        field_path = self.case_dir / str(time) / field_name
+        # Handle time formatting: OpenFOAM uses "0" for t=0, but keeps decimals for other times
+        time_str = str(int(time)) if time == 0.0 else str(time)
+        field_path = self.case_dir / time_str / field_name
+
+        # If not found, try alternative formatting
+        if not field_path.exists() and time != 0.0:
+            if str(time).endswith('.0'):
+                alt_time_str = str(int(time))
+                alt_field_path = self.case_dir / alt_time_str / field_name
+                if alt_field_path.exists():
+                    field_path = alt_field_path
 
         with open(field_path, 'r') as f:
             content = f.read()
