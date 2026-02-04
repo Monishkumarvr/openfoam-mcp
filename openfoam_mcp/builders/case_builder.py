@@ -114,6 +114,10 @@ class CaseBuilder:
         metal_props = self.metal_database.get(self.metal_type, self.metal_database["steel"])
         mold_props = self.mold_database.get(self.mold_material, self.mold_database["sand"])
 
+        # Calculate kinematic viscosity (nu = mu / rho)
+        # OpenFOAM needs kinematic viscosity (m²/s), not dynamic viscosity (Pa·s)
+        metal_nu = metal_props["viscosity"] / metal_props["density"]
+
         # Select template based on case type
         if self.case_type == "mold_filling":
             template = MOLD_FILLING_TEMPLATE
@@ -131,6 +135,7 @@ class CaseBuilder:
             content = content_template.format(
                 metal_density=metal_props["density"],
                 metal_viscosity=metal_props["viscosity"],
+                metal_nu=metal_nu,
                 metal_k=metal_props["thermal_conductivity"],
                 metal_cp=metal_props["specific_heat"],
                 liquidus_temp=metal_props["liquidus_temp"],
