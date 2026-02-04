@@ -22,7 +22,8 @@ from loguru import logger
 
 from .api.openfoam_client import OpenFOAMClient
 from .api.case_manager import CaseManager
-from .api.result_analyzer import ResultAnalyzer
+from .api.result_analyzer_real import RealResultAnalyzer  # REAL analyzer, not fake
+from .api.parametric_study import ParametricStudyEngine
 from .builders.case_builder import CaseBuilder
 
 # Configure logger
@@ -35,7 +36,8 @@ app = Server("openfoam-mcp")
 # Initialize managers
 openfoam_client = OpenFOAMClient()
 case_manager = CaseManager()
-result_analyzer = ResultAnalyzer()
+result_analyzer = RealResultAnalyzer()  # REAL analyzer with actual OpenFOAM parsing
+parametric_engine = ParametricStudyEngine()
 
 
 @app.list_tools()
@@ -376,6 +378,74 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["case_name", "optimization_metric"]
             }
+        ),
+        Tool(
+            name="run_parametric_study",
+            description="Run parametric study with real OpenFOAM simulations and actual result analysis",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "base_case_name": {
+                        "type": "string",
+                        "description": "Base case name for the study"
+                    },
+                    "parameters": {
+                        "type": "object",
+                        "description": "Parameters to vary (each key maps to list of values to test)",
+                        "properties": {
+                            "pouring_temperature": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "description": "List of pouring temperatures to test (Celsius)"
+                            },
+                            "inlet_velocity": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "description": "List of inlet velocities to test (m/s)"
+                            },
+                            "mold_temperature": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "description": "List of mold temperatures to test (Celsius)"
+                            }
+                        }
+                    },
+                    "metric": {
+                        "type": "string",
+                        "enum": ["minimize_porosity", "minimize_shrinkage", "minimize_hot_spots", "fastest_fill"],
+                        "default": "minimize_porosity",
+                        "description": "Optimization metric"
+                    }
+                },
+                "required": ["base_case_name", "parameters"]
+            }
+        ),
+        Tool(
+            name="compare_two_cases",
+            description="Compare results from two OpenFOAM cases with detailed analysis",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "case1_name": {
+                        "type": "string",
+                        "description": "First case name"
+                    },
+                    "case2_name": {
+                        "type": "string",
+                        "description": "Second case name"
+                    },
+                    "comparison_metrics": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["porosity", "shrinkage", "hot_spots", "fill_time", "temperature"]
+                        },
+                        "default": ["porosity", "shrinkage", "hot_spots"],
+                        "description": "Metrics to compare"
+                    }
+                },
+                "required": ["case1_name", "case2_name"]
+            }
         )
     ]
 
@@ -544,16 +614,93 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent | ImageCo
                 time_step=arguments.get("time_step")
             )
 
-            analysis_text = f"📊 Analysis Results for {case_name}\n\n"
+            # Format results from real analyzer
+            analysis_text = f"📊 Analysis Results for {case_name}\n"
+            analysis_text += f"Time directories found: {result.get('time_directories', [])}\n"
+            analysis_text += f"Latest time: {result.get('latest_time', 'N/A')}s\n\n"
 
+            # Filling pattern analysis
             if "filling_pattern" in result:
-                analysis_text += f"Filling Pattern:\n{result['filling_pattern']}\n\n"
+                fp = result['filling_pattern']
+                if "error" not in fp:
+                    analysis_text += "🌊 FILLING PATTERN:\n"
+                    analysis_text += f"  Fill percentage: {fp.get('fill_percentage', 0):.1f}%\n"
+                    analysis_text += f"  Filled cells: {fp.get('filled_cells', 0)}/{fp.get('total_cells', 0)}\n"
+                    analysis_text += f"  Air entrapment risk: {fp.get('air_entrapment_risk', 0):.2f}%\n"
+                    analysis_text += f"  Analysis: {fp.get('analysis', 'N/A')}\n\n"
+                else:
+                    analysis_text += f"⚠️ Filling pattern: {fp['error']}\n\n"
 
+            # Temperature distribution analysis
             if "temperature_distribution" in result:
-                analysis_text += f"Temperature Distribution:\n{result['temperature_distribution']}\n\n"
+                td = result['temperature_distribution']
+                if "error" not in td:
+                    analysis_text += "🌡️ TEMPERATURE DISTRIBUTION:\n"
+                    temp_stats = td.get('temperature_stats', {})
+                    analysis_text += f"  Min: {temp_stats.get('min', 0):.1f} K\n"
+                    analysis_text += f"  Max: {temp_stats.get('max', 0):.1f} K\n"
+                    analysis_text += f"  Mean: {temp_stats.get('mean', 0):.1f} K\n"
+                    analysis_text += f"  Hot spot percentage: {td.get('hot_spot_percentage', 0):.1f}%\n"
+                    grad_stats = td.get('gradient_stats', {})
+                    analysis_text += f"  Max gradient: {grad_stats.get('max', 0):.1f} K/m\n"
+                    analysis_text += f"  Analysis: {td.get('analysis', 'N/A')}\n\n"
+                else:
+                    analysis_text += f"⚠️ Temperature: {td['error']}\n\n"
 
+            # Solidification analysis
+            if "solidification" in result:
+                sol = result['solidification']
+                if "error" not in sol:
+                    analysis_text += "❄️ SOLIDIFICATION:\n"
+                    analysis_text += f"  Time span: {sol.get('time_span', 0):.2f} s\n"
+                    cooling_stats = sol.get('cooling_rate_stats', {})
+                    analysis_text += f"  Avg cooling rate: {cooling_stats.get('mean', 0):.2f} K/s\n"
+                    analysis_text += f"  Max cooling rate: {cooling_stats.get('max', 0):.2f} K/s\n"
+                    analysis_text += f"  Analysis: {sol.get('analysis', 'N/A')}\n\n"
+                else:
+                    analysis_text += f"⚠️ Solidification: {sol['error']}\n\n"
+
+            # Defect predictions
             if "defects" in result:
-                analysis_text += f"⚠️ Potential Defects:\n{result['defects']}\n\n"
+                analysis_text += "⚠️ DEFECT PREDICTIONS:\n"
+                defects = result['defects']
+
+                if "porosity" in defects:
+                    por = defects['porosity']
+                    if "error" not in por:
+                        analysis_text += f"\n  POROSITY (Niyama Criterion):\n"
+                        ny_stats = por.get('niyama_stats', {})
+                        analysis_text += f"    Mean Niyama: {ny_stats.get('mean', 0):.2f}\n"
+                        analysis_text += f"    High risk cells: {por.get('high_risk_cells', 0)}\n"
+                        analysis_text += f"    High risk percentage: {por.get('high_risk_percentage', 0):.1f}%\n"
+                        analysis_text += f"    {por.get('recommendation', 'N/A')}\n"
+                    else:
+                        analysis_text += f"    Porosity: {por['error']}\n"
+
+                if "shrinkage" in defects:
+                    shr = defects['shrinkage']
+                    if "error" not in shr:
+                        analysis_text += f"\n  SHRINKAGE:\n"
+                        analysis_text += f"    High temp cells: {shr.get('high_temp_cells', 0)}\n"
+                        analysis_text += f"    Isolated hot spots: {shr.get('isolated_hot_spots', 0)}\n"
+                        analysis_text += f"    Risk percentage: {shr.get('shrinkage_risk_percentage', 0):.1f}%\n"
+                        analysis_text += f"    {shr.get('recommendation', 'N/A')}\n"
+                    else:
+                        analysis_text += f"    Shrinkage: {shr['error']}\n"
+
+                if "hot_spots" in defects:
+                    hs = defects['hot_spots']
+                    if "error" not in hs:
+                        analysis_text += f"\n  HOT SPOTS:\n"
+                        analysis_text += f"    Count: {hs.get('hot_spot_count', 0)}\n"
+                        analysis_text += f"    Percentage: {hs.get('hot_spot_percentage', 0):.1f}%\n"
+                        analysis_text += f"    Threshold temp: {hs.get('threshold_temperature', 0):.1f} K\n"
+                        analysis_text += f"    {hs.get('recommendation', 'N/A')}\n"
+                    else:
+                        analysis_text += f"    Hot spots: {hs['error']}\n"
+
+            if "error" in result:
+                analysis_text += f"\n❌ Error: {result['error']}\n"
 
             return [TextContent(type="text", text=analysis_text)]
 
@@ -623,6 +770,157 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent | ImageCo
                      f"Improvement: {result['improvement']}%\n"
                      f"Iterations: {result['iterations']}"
             )]
+
+        elif name == "run_parametric_study":
+            base_case_name = arguments["base_case_name"]
+            parameters = arguments["parameters"]
+            metric = arguments.get("metric", "minimize_porosity")
+
+            logger.info(f"Starting parametric study for {base_case_name}")
+            logger.info(f"Parameters: {parameters}")
+            logger.info(f"Metric: {metric}")
+
+            result = await parametric_engine.run_parametric_study(
+                base_case_name=base_case_name,
+                parameters=parameters,
+                metric=metric
+            )
+
+            # Format parametric study results
+            study_text = f"🔬 PARAMETRIC STUDY RESULTS\n\n"
+            study_text += f"Base case: {base_case_name}\n"
+            study_text += f"Optimization metric: {metric}\n"
+            study_text += f"Total configurations tested: {len(result.get('study_results', []))}\n\n"
+
+            # Show optimal configuration
+            optimal = result.get('optimal_configuration', {})
+            if optimal:
+                study_text += "🏆 OPTIMAL CONFIGURATION:\n"
+                study_text += f"  Case name: {optimal.get('case_name', 'N/A')}\n"
+                study_text += f"  Parameters:\n"
+                for key, value in optimal.get('parameters', {}).items():
+                    study_text += f"    - {key}: {value}\n"
+
+                study_text += f"\n  Results:\n"
+                results = optimal.get('results', {})
+                if 'porosity_risk' in results:
+                    study_text += f"    - Porosity risk: {results['porosity_risk']:.2f}%\n"
+                if 'shrinkage_risk' in results:
+                    study_text += f"    - Shrinkage risk: {results['shrinkage_risk']:.2f}%\n"
+                if 'hot_spot_percentage' in results:
+                    study_text += f"    - Hot spots: {results['hot_spot_percentage']:.2f}%\n"
+
+            # Show comparison table
+            study_text += "\n📊 COMPARISON TABLE:\n"
+            study_text += f"{'Case':<20} {'Porosity':<12} {'Shrinkage':<12} {'Hot Spots':<12}\n"
+            study_text += "-" * 60 + "\n"
+
+            for study_result in result.get('study_results', [])[:10]:  # Show top 10
+                case = study_result.get('case_name', 'N/A')
+                results = study_result.get('results', {})
+                por = results.get('porosity_risk', 0)
+                shr = results.get('shrinkage_risk', 0)
+                hot = results.get('hot_spot_percentage', 0)
+                study_text += f"{case[:20]:<20} {por:>10.1f}% {shr:>10.1f}% {hot:>10.1f}%\n"
+
+            if len(result.get('study_results', [])) > 10:
+                study_text += f"\n... and {len(result['study_results']) - 10} more configurations\n"
+
+            study_text += f"\n💡 Recommendation: Use configuration '{optimal.get('case_name', 'N/A')}' for best results.\n"
+
+            return [TextContent(type="text", text=study_text)]
+
+        elif name == "compare_two_cases":
+            case1_name = arguments["case1_name"]
+            case2_name = arguments["case2_name"]
+            comparison_metrics = arguments.get("comparison_metrics", ["porosity", "shrinkage", "hot_spots"])
+
+            logger.info(f"Comparing cases: {case1_name} vs {case2_name}")
+
+            result = await parametric_engine.compare_two_cases(
+                case1_name=case1_name,
+                case2_name=case2_name,
+                metrics=comparison_metrics
+            )
+
+            # Format comparison results
+            comp_text = f"⚖️ CASE COMPARISON\n\n"
+            comp_text += f"Case 1: {case1_name}\n"
+            comp_text += f"Case 2: {case2_name}\n\n"
+
+            case1_results = result.get('case1_results', {})
+            case2_results = result.get('case2_results', {})
+
+            for metric in comparison_metrics:
+                comp_text += f"--- {metric.upper()} ---\n"
+
+                if metric == "porosity":
+                    c1_por = case1_results.get('porosity', {})
+                    c2_por = case2_results.get('porosity', {})
+
+                    if "error" not in c1_por and "error" not in c2_por:
+                        c1_risk = c1_por.get('high_risk_percentage', 0)
+                        c2_risk = c2_por.get('high_risk_percentage', 0)
+
+                        comp_text += f"  {case1_name}: {c1_risk:.1f}% high risk\n"
+                        comp_text += f"  {case2_name}: {c2_risk:.1f}% high risk\n"
+
+                        if c1_risk < c2_risk:
+                            diff = c2_risk - c1_risk
+                            comp_text += f"  ✅ {case1_name} is better by {diff:.1f}%\n"
+                        elif c2_risk < c1_risk:
+                            diff = c1_risk - c2_risk
+                            comp_text += f"  ✅ {case2_name} is better by {diff:.1f}%\n"
+                        else:
+                            comp_text += f"  🟰 Both cases have similar porosity risk\n"
+
+                elif metric == "shrinkage":
+                    c1_shr = case1_results.get('shrinkage', {})
+                    c2_shr = case2_results.get('shrinkage', {})
+
+                    if "error" not in c1_shr and "error" not in c2_shr:
+                        c1_risk = c1_shr.get('shrinkage_risk_percentage', 0)
+                        c2_risk = c2_shr.get('shrinkage_risk_percentage', 0)
+
+                        comp_text += f"  {case1_name}: {c1_risk:.1f}% risk\n"
+                        comp_text += f"  {case2_name}: {c2_risk:.1f}% risk\n"
+
+                        if c1_risk < c2_risk:
+                            diff = c2_risk - c1_risk
+                            comp_text += f"  ✅ {case1_name} is better by {diff:.1f}%\n"
+                        elif c2_risk < c1_risk:
+                            diff = c1_risk - c2_risk
+                            comp_text += f"  ✅ {case2_name} is better by {diff:.1f}%\n"
+                        else:
+                            comp_text += f"  🟰 Both cases have similar shrinkage risk\n"
+
+                elif metric == "hot_spots":
+                    c1_hs = case1_results.get('hot_spots', {})
+                    c2_hs = case2_results.get('hot_spots', {})
+
+                    if "error" not in c1_hs and "error" not in c2_hs:
+                        c1_pct = c1_hs.get('hot_spot_percentage', 0)
+                        c2_pct = c2_hs.get('hot_spot_percentage', 0)
+
+                        comp_text += f"  {case1_name}: {c1_pct:.1f}% hot spots\n"
+                        comp_text += f"  {case2_name}: {c2_pct:.1f}% hot spots\n"
+
+                        if c1_pct < c2_pct:
+                            diff = c2_pct - c1_pct
+                            comp_text += f"  ✅ {case1_name} is better by {diff:.1f}%\n"
+                        elif c2_pct < c1_pct:
+                            diff = c1_pct - c2_pct
+                            comp_text += f"  ✅ {case2_name} is better by {diff:.1f}%\n"
+                        else:
+                            comp_text += f"  🟰 Both cases have similar hot spot distribution\n"
+
+                comp_text += "\n"
+
+            # Overall recommendation
+            winner = result.get('better_case', 'N/A')
+            comp_text += f"🏆 OVERALL WINNER: {winner}\n"
+
+            return [TextContent(type="text", text=comp_text)]
 
         else:
             return [TextContent(
