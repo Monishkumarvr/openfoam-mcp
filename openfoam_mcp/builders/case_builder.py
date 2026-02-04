@@ -52,8 +52,8 @@ class CaseBuilder:
                 "viscosity": 0.004,
                 "thermal_conductivity": 380,
                 "specific_heat": 385,
-                "liquidus_temp": 1358,
-                "solidus_temp": 1358,
+                "liquidus_temp": 1358,  # Pure copper - no freezing range
+                "solidus_temp": 1358,    # Liquidus = Solidus for pure metals
                 "latent_heat": 205000
             },
             "bronze": {
