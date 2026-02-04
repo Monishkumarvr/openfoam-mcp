@@ -343,6 +343,20 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="diagnostic_health_check",
+            description="Run diagnostic health check to verify MCP server configuration and analyzer status",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "verbose": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Include detailed diagnostic information"
+                    }
+                }
+            }
+        ),
+        Tool(
             name="optimize_gating_system",
             description="Run parametric study to optimize gate and riser positions",
             inputSchema={
@@ -749,6 +763,174 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent | ImageCo
                      f"Progress: {status['progress']}%\n"
                      f"Last updated: {status['last_updated']}"
             )]
+
+        elif name == "diagnostic_health_check":
+            import subprocess
+            import shutil
+            from pathlib import Path
+
+            verbose = arguments.get("verbose", True)
+
+            diagnostic = "🔍 OPENFOAM MCP DIAGNOSTIC HEALTH CHECK\n"
+            diagnostic += "="*60 + "\n\n"
+
+            # Check 1: Analyzer type
+            analyzer_type = type(result_analyzer).__name__
+            analyzer_module = type(result_analyzer).__module__
+
+            if analyzer_type == "RealResultAnalyzer":
+                diagnostic += "✅ ANALYZER: RealResultAnalyzer (CORRECT)\n"
+                diagnostic += f"   Module: {analyzer_module}\n"
+                diagnostic += "   Status: Using physics-based analysis\n\n"
+            else:
+                diagnostic += f"❌ ANALYZER: {analyzer_type} (WRONG!)\n"
+                diagnostic += f"   Module: {analyzer_module}\n"
+                diagnostic += "   Status: NOT using real analyzer!\n\n"
+
+            # Check 2: OpenFOAM installation
+            openfoam_cmds = ["blockMesh", "interFoam", "simpleFoam"]
+            openfoam_found = []
+            openfoam_missing = []
+
+            for cmd in openfoam_cmds:
+                if shutil.which(cmd):
+                    openfoam_found.append(cmd)
+                else:
+                    openfoam_missing.append(cmd)
+
+            if openfoam_found:
+                diagnostic += f"✅ OPENFOAM: {len(openfoam_found)}/{len(openfoam_cmds)} commands found\n"
+                diagnostic += f"   Available: {', '.join(openfoam_found)}\n"
+            else:
+                diagnostic += f"❌ OPENFOAM: No commands found\n"
+                diagnostic += f"   Missing: {', '.join(openfoam_missing)}\n"
+
+            if openfoam_missing:
+                diagnostic += f"   Missing: {', '.join(openfoam_missing)}\n"
+            diagnostic += "\n"
+
+            # Check 3: Case directory
+            run_dir = Path.home() / "foam" / "run"
+            if run_dir.exists():
+                cases = list(run_dir.glob("*"))
+                case_count = len([c for c in cases if c.is_dir()])
+                diagnostic += f"✅ CASES DIRECTORY: {run_dir}\n"
+                diagnostic += f"   Cases found: {case_count}\n"
+
+                if verbose and case_count > 0:
+                    diagnostic += f"   Case list:\n"
+                    for case in cases[:10]:  # Show first 10
+                        if case.is_dir():
+                            # Check for time directories
+                            time_dirs = [d for d in case.iterdir() if d.is_dir() and d.name.replace('.', '').isdigit()]
+                            has_fields = any((case / "0" / "T").exists() for _ in [0])  # Check for T field
+                            status = "✓ has fields" if has_fields else "⚠ no fields"
+                            diagnostic += f"     - {case.name}: {len(time_dirs)} time dirs, {status}\n"
+                    if case_count > 10:
+                        diagnostic += f"     ... and {case_count - 10} more\n"
+            else:
+                diagnostic += f"⚠️ CASES DIRECTORY: {run_dir}\n"
+                diagnostic += f"   Status: Directory does not exist\n"
+                diagnostic += f"   Note: No cases have been created yet\n"
+            diagnostic += "\n"
+
+            # Check 4: Test real analyzer
+            diagnostic += "📊 ANALYZER TEST:\n"
+            try:
+                # Try to import and test
+                from openfoam_mcp.api.result_analyzer_real import RealResultAnalyzer
+                from openfoam_mcp.utils.field_parser import OpenFOAMFieldParser
+
+                diagnostic += "   ✅ RealResultAnalyzer import successful\n"
+                diagnostic += "   ✅ OpenFOAMFieldParser import successful\n"
+
+                # Check if old fake analyzer can be imported
+                try:
+                    from openfoam_mcp.api.result_analyzer import ResultAnalyzer
+                    diagnostic += "   ❌ WARNING: Old fake ResultAnalyzer still importable!\n"
+                    diagnostic += "      This should have been deleted.\n"
+                except ImportError:
+                    diagnostic += "   ✅ Old fake analyzer properly removed\n"
+
+            except Exception as e:
+                diagnostic += f"   ❌ Error testing analyzer: {e}\n"
+
+            diagnostic += "\n"
+
+            # Check 5: Python dependencies
+            diagnostic += "🐍 PYTHON ENVIRONMENT:\n"
+            try:
+                import numpy
+                diagnostic += f"   ✅ numpy {numpy.__version__}\n"
+            except ImportError:
+                diagnostic += f"   ❌ numpy not installed\n"
+
+            try:
+                import loguru
+                diagnostic += f"   ✅ loguru installed\n"
+            except ImportError:
+                diagnostic += f"   ❌ loguru not installed\n"
+
+            diagnostic += "\n"
+
+            # Check 6: Git status
+            try:
+                git_hash = subprocess.check_output(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    cwd="/home/user/openfoam-mcp",
+                    stderr=subprocess.DEVNULL
+                ).decode().strip()
+
+                git_branch = subprocess.check_output(
+                    ["git", "branch", "--show-current"],
+                    cwd="/home/user/openfoam-mcp",
+                    stderr=subprocess.DEVNULL
+                ).decode().strip()
+
+                diagnostic += f"📂 REPOSITORY STATUS:\n"
+                diagnostic += f"   Branch: {git_branch}\n"
+                diagnostic += f"   Commit: {git_hash}\n"
+
+                # Check if on expected commit (798e1fa or later)
+                try:
+                    # Get commit message
+                    commit_msg = subprocess.check_output(
+                        ["git", "log", "-1", "--oneline"],
+                        cwd="/home/user/openfoam-mcp",
+                        stderr=subprocess.DEVNULL
+                    ).decode().strip()
+                    diagnostic += f"   Latest: {commit_msg}\n"
+                except:
+                    pass
+
+            except:
+                diagnostic += f"📂 REPOSITORY STATUS: Unable to check git status\n"
+
+            diagnostic += "\n"
+            diagnostic += "="*60 + "\n"
+
+            # Summary and recommendations
+            diagnostic += "\n💡 RECOMMENDATIONS:\n"
+
+            if analyzer_type != "RealResultAnalyzer":
+                diagnostic += "   ❌ CRITICAL: Not using RealResultAnalyzer!\n"
+                diagnostic += "      → Restart the MCP server immediately\n"
+                diagnostic += "      → Check MCP client configuration\n\n"
+
+            if not openfoam_found:
+                diagnostic += "   ⚠️ OpenFOAM not installed or not in PATH\n"
+                diagnostic += "      → Simulations will fail\n"
+                diagnostic += "      → Install OpenFOAM or source bashrc\n\n"
+
+            if not run_dir.exists() or case_count == 0:
+                diagnostic += "   ℹ️ No cases created yet\n"
+                diagnostic += "      → Use 'create_casting_case' tool first\n\n"
+
+            if analyzer_type == "RealResultAnalyzer" and openfoam_found:
+                diagnostic += "   ✅ System appears configured correctly\n"
+                diagnostic += "      → Ready to run simulations\n"
+
+            return [TextContent(type="text", text=diagnostic)]
 
         elif name == "optimize_gating_system":
             case_name = arguments["case_name"]
