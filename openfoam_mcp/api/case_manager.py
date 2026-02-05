@@ -526,12 +526,20 @@ mergeTolerance 1e-6;
         updated_files = []
         import re
 
-        # Convert temperatures to Kelvin if they look like Celsius (< 1000)
-        # Celsius range for casting: -50 to 3000°C
-        # Kelvin range for casting: 273K to 3273K
-        # Threshold of 1000 safely separates typical Celsius from Kelvin values
+        # Convert temperatures to Kelvin if they look like Celsius
+        # Smart detection: values ending in .15 are likely already Kelvin (from +273.15)
+        # Threshold: < 1500 = Celsius, >= 1500 = Kelvin
+        # This handles typical casting ranges:
+        #   - Celsius: -50 to 3000°C (ambient to ultra-high temp)
+        #   - Kelvin: 223 to 3273 K
         def to_kelvin(temp: float) -> float:
-            return temp + 273.15 if temp < 1000 else temp
+            # Check if already converted to Kelvin (decimal part near .15)
+            decimal_part = temp - int(temp)
+            if abs(decimal_part - 0.15) < 0.02:  # Within 0.02 of .15
+                return temp  # Already in Kelvin
+
+            # Use threshold for round numbers
+            return temp + 273.15 if temp < 1500 else temp
 
         # Update velocity field (0/U)
         if "inlet_velocity" in kwargs:
