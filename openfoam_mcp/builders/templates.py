@@ -802,7 +802,7 @@ mixture
     {{
         Cp          {metal_cp};
         Hf          0;
-        Tref        300;
+        Tref        {ambient_temp};
     }}
     transport
     {{
@@ -852,7 +852,7 @@ mixture
     {{
         Cp          1007;
         Hf          0;
-        Tref        300;
+        Tref        {ambient_temp};
     }}
     transport
     {{
