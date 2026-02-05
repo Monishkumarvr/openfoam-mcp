@@ -19,7 +19,9 @@ FoamFile
 }}}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-application     interFoam;
+application     foamRun;
+
+solver          incompressibleVoF;
 
 startFrom       startTime;
 
