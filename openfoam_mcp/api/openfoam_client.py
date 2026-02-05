@@ -156,35 +156,43 @@ class OpenFOAMClient:
 
         return stats
 
-    def _detect_solver_from_controldict(self, case_dir: Path) -> str:
+    def _detect_solver_from_controldict(self, case_dir: Path) -> tuple[str, Optional[str]]:
         """Detect which solver to use from controlDict.
 
         Args:
             case_dir: Case directory
 
         Returns:
-            Solver name
+            Tuple of (application, solver_module) where solver_module is only used for foamRun
         """
         control_dict = case_dir / "system" / "controlDict"
 
         if not control_dict.exists():
-            return "interFoam"  # fallback
+            return ("interFoam", None)  # fallback
 
         with open(control_dict, 'r') as f:
             content = f.read()
 
+        import re
+
         # Check for OpenFOAM 11+ style (foamRun with solver directive)
-        if 'application' in content and 'foamRun' in content:
-            return "foamRun"  # foamRun will read solver directive from controlDict
+        app_match = re.search(r'application\s+(\w+);', content)
+        if app_match and app_match.group(1) == 'foamRun':
+            # Extract solver module name
+            solver_match = re.search(r'solver\s+(\w+);', content)
+            if solver_match:
+                solver_module = solver_match.group(1)
+                return ("foamRun", solver_module)
+            else:
+                logger.warning("foamRun detected but no solver module found in controlDict")
+                return ("foamRun", "incompressibleVoF")  # fallback to common module
 
         # Check for traditional application directive
-        import re
-        app_match = re.search(r'application\s+(\w+);', content)
         if app_match:
-            return app_match.group(1)
+            return (app_match.group(1), None)
 
         # Fallback
-        return "interFoam"
+        return ("interFoam", None)
 
     async def run_simulation(
         self,
@@ -219,9 +227,22 @@ class OpenFOAMClient:
             )
 
         # Auto-detect solver if not specified
+        solver_app = None
+        solver_module = None
+
         if solver is None:
-            solver = self._detect_solver_from_controldict(case_dir)
-            logger.info(f"Auto-detected solver: {solver}")
+            solver_app, solver_module = self._detect_solver_from_controldict(case_dir)
+            logger.info(f"Auto-detected solver: {solver_app}" +
+                       (f" with module {solver_module}" if solver_module else ""))
+        else:
+            # Legacy: solver provided as string
+            solver_app = solver
+
+        # Build solver command
+        if solver_app == "foamRun" and solver_module:
+            solver_cmd = ["foamRun", "-solver", solver_module]
+        else:
+            solver_cmd = [solver_app]
 
         if parallel:
             # Decompose case
@@ -231,10 +252,17 @@ class OpenFOAMClient:
             )
 
             # Run solver in parallel
-            result = await self.run_command(
-                ["mpirun", "-np", str(num_processors), solver, "-parallel"],
-                str(case_dir)
-            )
+            if solver_app == "foamRun":
+                # For foamRun, -parallel goes after -solver
+                result = await self.run_command(
+                    ["mpirun", "-np", str(num_processors)] + solver_cmd + ["-parallel"],
+                    str(case_dir)
+                )
+            else:
+                result = await self.run_command(
+                    ["mpirun", "-np", str(num_processors), solver_app, "-parallel"],
+                    str(case_dir)
+                )
 
             # Reconstruct case
             await self.run_command(
@@ -243,7 +271,7 @@ class OpenFOAMClient:
             )
         else:
             result = await self.run_command(
-                [solver],
+                solver_cmd,
                 str(case_dir)
             )
 
