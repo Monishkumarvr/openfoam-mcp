@@ -430,8 +430,9 @@ mergeTolerance 1e-6;
 
         Args:
             case_name: Name of the case
-            metal_properties: Metal material properties
-            mold_properties: Mold material properties
+            metal_properties: Metal material properties (density, specific_heat,
+                            thermal_conductivity, viscosity, liquidus_temp, solidus_temp, latent_heat)
+            mold_properties: Mold material properties (density, specific_heat, thermal_conductivity)
 
         Returns:
             Dictionary with setup info
@@ -441,12 +442,62 @@ mergeTolerance 1e-6;
         if not case_dir.exists():
             raise ValueError(f"Case {case_name} does not exist")
 
-        # This would write to transportProperties, thermophysicalProperties, etc.
-        # Simplified implementation - would need full OpenFOAM dict writer
+        updated_files = []
 
-        logger.info(f"Material properties configured for {case_name}")
+        # Update metal properties if provided
+        if metal_properties:
+            metal_props_file = case_dir / "constant" / "physicalProperties.metal"
+            if metal_props_file.exists():
+                with open(metal_props_file, 'r') as f:
+                    content = f.read()
 
-        return {"status": "configured"}
+                # Update density
+                if "density" in metal_properties:
+                    content = self._update_dict_value(content, "rho", metal_properties["density"])
+
+                # Update specific heat
+                if "specific_heat" in metal_properties:
+                    content = self._update_dict_value(content, "Cp", metal_properties["specific_heat"])
+
+                # Update viscosity (dynamic)
+                if "viscosity" in metal_properties:
+                    content = self._update_dict_value(content, "mu", metal_properties["viscosity"])
+
+                # Update thermal conductivity (if using const transport with Pr)
+                # Note: For const transport with Pr, k = mu * Cp / Pr
+                # OpenFOAM calculates k internally, so we just update mu and Pr
+
+                with open(metal_props_file, 'w') as f:
+                    f.write(content)
+                updated_files.append("physicalProperties.metal")
+
+        # Update mold/wall properties if provided
+        # For thermal boundary conditions, this is typically handled via boundary conditions
+        # rather than a separate mold properties file
+
+        logger.info(f"Material properties configured for {case_name}: {updated_files}")
+
+        return {
+            "status": "configured",
+            "files_updated": updated_files
+        }
+
+    def _update_dict_value(self, content: str, key: str, value: float) -> str:
+        """Update a value in an OpenFOAM dictionary.
+
+        Args:
+            content: File content
+            key: Dictionary key
+            value: New value
+
+        Returns:
+            Updated content
+        """
+        import re
+        # Pattern matches: key  value; (with flexible whitespace)
+        pattern = rf'({key}\s+)[0-9.eE+-]+(\s*;)'
+        replacement = rf'\g<1>{value}\g<2>'
+        return re.sub(pattern, replacement, content)
 
     async def setup_boundary_conditions(
         self,
@@ -457,7 +508,12 @@ mergeTolerance 1e-6;
 
         Args:
             case_name: Name of the case
-            **kwargs: Boundary condition parameters
+            **kwargs: Boundary condition parameters:
+                - inlet_velocity: Inlet velocity (m/s)
+                - inlet_temperature: Inlet temperature (K or °C, will convert)
+                - mold_wall_temperature: Mold wall temperature (K or °C, will convert)
+                - ambient_temperature: Ambient temperature (K or °C, will convert)
+                - heat_transfer_coefficient: Wall heat transfer coefficient (W/m²K)
 
         Returns:
             Dictionary with setup info
@@ -467,12 +523,92 @@ mergeTolerance 1e-6;
         if not case_dir.exists():
             raise ValueError(f"Case {case_name} does not exist")
 
-        # This would update 0/ directory files
-        # Simplified implementation
+        updated_files = []
+        import re
 
-        logger.info(f"Boundary conditions configured for {case_name}")
+        # Convert temperatures to Kelvin if they look like Celsius (< 1000)
+        # Celsius range for casting: -50 to 3000°C
+        # Kelvin range for casting: 273K to 3273K
+        # Threshold of 1000 safely separates typical Celsius from Kelvin values
+        def to_kelvin(temp: float) -> float:
+            return temp + 273.15 if temp < 1000 else temp
 
-        return {"status": "configured"}
+        # Update velocity field (0/U)
+        if "inlet_velocity" in kwargs:
+            u_file = case_dir / "0" / "U"
+            if u_file.exists():
+                with open(u_file, 'r') as f:
+                    content = f.read()
+
+                # Update inlet velocity (assuming vertical inlet in z-direction)
+                v = kwargs["inlet_velocity"]
+                velocity_vec = f"(0 0 {v})"
+
+                # Update inlet boundary condition
+                content = self._update_boundary_value(content, "inlet", velocity_vec)
+
+                with open(u_file, 'w') as f:
+                    f.write(content)
+                updated_files.append("0/U")
+
+        # Update temperature field (0/T)
+        if any(k in kwargs for k in ["inlet_temperature", "mold_wall_temperature", "ambient_temperature"]):
+            t_file = case_dir / "0" / "T"
+            if t_file.exists():
+                with open(t_file, 'r') as f:
+                    content = f.read()
+
+                if "inlet_temperature" in kwargs:
+                    T_inlet = to_kelvin(kwargs["inlet_temperature"])
+                    content = self._update_boundary_value(content, "inlet", T_inlet)
+
+                if "mold_wall_temperature" in kwargs:
+                    T_wall = to_kelvin(kwargs["mold_wall_temperature"])
+                    content = self._update_boundary_value(content, "walls", T_wall)
+
+                if "ambient_temperature" in kwargs:
+                    T_ambient = to_kelvin(kwargs["ambient_temperature"])
+                    # Update internalField
+                    pattern = r'(internalField\s+uniform\s+)[0-9.eE+-]+(\s*;)'
+                    content = re.sub(pattern, rf'\g<1>{T_ambient}\g<2>', content)
+
+                with open(t_file, 'w') as f:
+                    f.write(content)
+                updated_files.append("0/T")
+
+        # Update heat transfer coefficient if specified (would need mixed BC type)
+        if "heat_transfer_coefficient" in kwargs:
+            # This would require changing BC type to mixed or externalWallHeatFluxTemperature
+            # Skipping for now as it requires more complex BC modification
+            logger.warning("heat_transfer_coefficient specified but requires mixed BC type - not implemented yet")
+
+        logger.info(f"Boundary conditions configured for {case_name}: {updated_files}")
+
+        return {
+            "status": "configured",
+            "files_updated": updated_files
+        }
+
+    def _update_boundary_value(self, content: str, patch_name: str, value) -> str:
+        """Update a boundary condition value for a specific patch.
+
+        Args:
+            content: File content
+            patch_name: Name of the patch (e.g., "inlet", "walls")
+            value: New value (can be scalar or vector string)
+
+        Returns:
+            Updated content
+        """
+        import re
+
+        # Find the patch section
+        patch_pattern = rf'({patch_name}\s*\{{[^}}]*?value\s+uniform\s+)([^;]+)(;)'
+
+        def replace_value(match):
+            return f"{match.group(1)}{value}{match.group(3)}"
+
+        return re.sub(patch_pattern, replace_value, content, flags=re.DOTALL)
 
     async def get_case_status(self, case_name: str) -> Dict[str, Any]:
         """Get status of a case.
