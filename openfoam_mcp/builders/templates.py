@@ -426,7 +426,7 @@ FoamFile
 }}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-application     interPhaseChangeFoam;
+application     interFoam;
 
 startFrom       startTime;
 
