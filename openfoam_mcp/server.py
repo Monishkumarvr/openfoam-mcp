@@ -972,11 +972,25 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent | ImageCo
             study_text = f"🔬 PARAMETRIC STUDY RESULTS\n\n"
             study_text += f"Base case: {base_case_name}\n"
             study_text += f"Optimization metric: {metric}\n"
-            study_text += f"Total configurations tested: {len(result.get('study_results', []))}\n\n"
+            study_text += f"Total configurations tested: {result.get('total_runs', 0)}\n"
+            study_text += f"Completed: {result.get('completed_runs', 0)}\n"
+            study_text += f"Failed: {result.get('failed_runs', 0)}\n\n"
+
+            # Check for comparison errors
+            comparison = result.get('comparison', {})
+            if 'error' in comparison:
+                study_text += f"❌ ERROR: {comparison['error']}\n\n"
+
+                # Show errors from failed runs
+                failed_results = [r for r in result.get('study_results', []) if 'error' in r]
+                if failed_results:
+                    study_text += "Failed configurations:\n"
+                    for fail in failed_results[:5]:  # Show first 5 failures
+                        study_text += f"  - {fail.get('case_name', 'N/A')}: {fail.get('error', 'Unknown error')}\n"
 
             # Show optimal configuration
-            optimal = result.get('optimal_configuration', {})
-            if optimal:
+            optimal = result.get('optimal_configuration') or {}
+            if optimal and isinstance(optimal, dict):
                 study_text += "🏆 OPTIMAL CONFIGURATION:\n"
                 study_text += f"  Case name: {optimal.get('case_name', 'N/A')}\n"
                 study_text += f"  Parameters:\n"
