@@ -802,6 +802,7 @@ mixture
     {{
         Cp          {metal_cp};
         Hf          0;
+        Tref        300;
     }}
     transport
     {{
@@ -851,6 +852,7 @@ mixture
     {{
         Cp          1007;
         Hf          0;
+        Tref        300;
     }}
     transport
     {{
