@@ -752,7 +752,7 @@ metal
 
 air
 {{
-    type            pureStaticSolidPhaseModel;
+    type            pureMovingPhaseModel;
 }}
 
 sigma   0.07;
