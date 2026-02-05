@@ -743,14 +743,14 @@ FoamFile
 
 type    thermalPhaseChangeMultiphaseSystem;
 
-phases  (metal air);
+phases  (metal gas);
 
 metal
 {{
     type            pureMovingPhaseModel;
 }}
 
-air
+gas
 {{
     type            pureMovingPhaseModel;
 }}
@@ -814,7 +814,7 @@ mixture
 // ************************************************************************* //
 """,
 
-    "constant/physicalProperties.air": """/*--------------------------------*- C++ -*----------------------------------*\
+    "constant/physicalProperties.gas": """/*--------------------------------*- C++ -*----------------------------------*\
 | =========                 |                                                 |
 | \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
 |  \\    /   O peration     | Version:  11                                    |
@@ -827,7 +827,7 @@ FoamFile
     format      ascii;
     class       dictionary;
     location    "constant";
-    object      physicalProperties.air;
+    object      physicalProperties.gas;
 }}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
