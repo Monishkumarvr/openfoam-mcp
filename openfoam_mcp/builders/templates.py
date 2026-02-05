@@ -412,8 +412,8 @@ SOLIDIFICATION_TEMPLATE = {
     "system/controlDict": """/*--------------------------------*- C++ -*----------------------------------*\\
 | =========                 |                                                 |
 | \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
-|  \\\\    /   O peration     | Version:  v2306                                 |
-|   \\\\  /    A nd           | Website:  www.openfoam.com                      |
+|  \\\\    /   O peration     | Version:  11                                    |
+|   \\\\  /    A nd           | Website:  www.openfoam.org                      |
 |    \\\\/     M anipulation  |                                                 |
 \\*---------------------------------------------------------------------------*/
 FoamFile
@@ -426,7 +426,9 @@ FoamFile
 }}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-application     interFoam;
+application     foamRun;
+
+solver          compressibleVoF;
 
 startFrom       startTime;
 
@@ -504,6 +506,59 @@ boundaryField
     outlet
     {{
         type            zeroGradient;
+    }}
+}}
+
+// ************************************************************************* //
+""",
+
+    "constant/thermophysicalProperties": """/*--------------------------------*- C++ -*----------------------------------*\\
+| =========                 |                                                 |
+| \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\\\    /   O peration     | Version:  11                                    |
+|   \\\\  /    A nd           | Website:  www.openfoam.org                      |
+|    \\\\/     M anipulation  |                                                 |
+\\*---------------------------------------------------------------------------*/
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      thermophysicalProperties;
+}}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+thermoType
+{{
+    type            heRhoThermo;
+    mixture         pureMixture;
+    transport       const;
+    thermo          hConst;
+    equationOfState rhoConst;
+    specie          specie;
+    energy          sensibleEnthalpy;
+}}
+
+mixture
+{{
+    specie
+    {{
+        molWeight   26.98;  // Aluminum
+    }}
+    equationOfState
+    {{
+        rho         2700;    // kg/m3 - solid aluminum density
+    }}
+    thermodynamics
+    {{
+        Cp          900;     // J/kg/K - specific heat
+        Hf          0;       // J/kg - heat of formation
+    }}
+    transport
+    {{
+        mu          1e-3;    // Pa.s - viscosity
+        Pr          0.7;     // Prandtl number
     }}
 }}
 

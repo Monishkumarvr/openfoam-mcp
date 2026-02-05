@@ -188,6 +188,14 @@ class OpenFOAMClient:
                 write_interval=write_interval
             )
 
+        # Check if controlDict uses foamRun (OpenFOAM 11 style)
+        control_dict = case_dir / "system" / "controlDict"
+        if control_dict.exists():
+            with open(control_dict, 'r') as f:
+                content = f.read()
+                if 'application' in content and 'foamRun' in content:
+                    solver = "foamRun"  # Override solver to use foamRun
+
         if parallel:
             # Decompose case
             await self.run_command(
