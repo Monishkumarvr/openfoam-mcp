@@ -10,13 +10,13 @@ MOLD_FILLING_TEMPLATE = {
 |    \\\\/     M anipulation  |                                                 |
 \\*---------------------------------------------------------------------------*/
 FoamFile
-{{
+{{{{
     version     2.0;
     format      ascii;
     class       dictionary;
     location    "system";
     object      controlDict;
-}}
+}}}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 application     interFoam;
@@ -68,47 +68,47 @@ maxDeltaT       1;
 |    \\\\/     M anipulation  |                                                 |
 \\*---------------------------------------------------------------------------*/
 FoamFile
-{{
+{{{{
     version     2.0;
     format      ascii;
     class       dictionary;
     location    "system";
     object      fvSchemes;
-}}
+}}}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 ddtSchemes
-{{
+{{{{
     default         Euler;
-}}
+}}}}
 
 gradSchemes
-{{
+{{{{
     default         Gauss linear;
-}}
+}}}}
 
 divSchemes
-{{
+{{{{
     div(rhoPhi,U)   Gauss linearUpwind grad(U);
     div(phi,alpha)  Gauss vanLeer;
     div(phirb,alpha) Gauss linear;
     div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
-}}
+}}}}
 
 laplacianSchemes
-{{
+{{{{
     default         Gauss linear corrected;
-}}
+}}}}
 
 interpolationSchemes
-{{
+{{{{
     default         linear;
-}}
+}}}}
 
 snGradSchemes
-{{
+{{{{
     default         corrected;
-}}
+}}}}
 
 // ************************************************************************* //
 """,
@@ -121,70 +121,70 @@ snGradSchemes
 |    \\\\/     M anipulation  |                                                 |
 \\*---------------------------------------------------------------------------*/
 FoamFile
-{{
+{{{{
     version     2.0;
     format      ascii;
     class       dictionary;
     location    "system";
     object      fvSolution;
-}}
+}}}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 solvers
-{{
+{{{{
     "alpha.metal.*"
-    {{
+    {{{{
         nAlphaCorr      2;
         nAlphaSubCycles 1;
         cAlpha          1;
-    }}
+    }}}}
 
     pcorr
-    {{
+    {{{{
         solver          PCG;
         preconditioner  DIC;
         tolerance       1e-5;
         relTol          0;
-    }}
+    }}}}
 
     p_rgh
-    {{
+    {{{{
         solver          PCG;
         preconditioner  DIC;
         tolerance       1e-07;
         relTol          0.05;
-    }}
+    }}}}
 
     p_rghFinal
-    {{
+    {{{{
         $p_rgh;
         relTol          0;
-    }}
+    }}}}
 
     U
-    {{
+    {{{{
         solver          smoothSolver;
         smoother        symGaussSeidel;
         tolerance       1e-06;
         relTol          0;
-    }}
-}}
+    }}}}
+}}}}
 
 PIMPLE
-{{
+{{{{
     momentumPredictor   no;
     nOuterCorrectors    1;
     nCorrectors         3;
     nNonOrthogonalCorrectors 0;
-}}
+}}}}
 
 relaxationFactors
-{{
+{{{{
     equations
-    {{
+    {{{{
         ".*"            1;
-    }}
-}}
+    }}}}
+}}}}
 
 // ************************************************************************* //
 """,
@@ -197,30 +197,30 @@ relaxationFactors
 |    \\\\/     M anipulation  |                                                 |
 \\*---------------------------------------------------------------------------*/
 FoamFile
-{{
+{{{{
     version     2.0;
     format      ascii;
     class       dictionary;
     location    "constant";
     object      transportProperties;
-}}
+}}}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 phases (metal air);
 
 metal
-{{
+{{{{
     transportModel  Newtonian;
     nu              {metal_nu};
     rho             {metal_density};
-}}
+}}}}
 
 air
-{{
+{{{{
     transportModel  Newtonian;
     nu              1.48e-05;
     rho             1;
-}}
+}}}}
 
 sigma           0.07;
 
@@ -235,13 +235,13 @@ sigma           0.07;
 |    \\\\/     M anipulation  |                                                 |
 \\*---------------------------------------------------------------------------*/
 FoamFile
-{{
+{{{{
     version     2.0;
     format      ascii;
     class       uniformDimensionedVectorField;
     location    "constant";
     object      g;
-}}
+}}}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 dimensions      [0 1 -2 0 0 0 0];
@@ -258,13 +258,13 @@ value           (0 0 -9.81);
 |    \\\\/     M anipulation  |                                                 |
 \\*---------------------------------------------------------------------------*/
 FoamFile
-{{
+{{{{
     version     2.0;
     format      ascii;
     class       dictionary;
     location    "constant";
     object      momentumTransport;
-}}
+}}}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 simulationType  laminar;
@@ -280,12 +280,12 @@ simulationType  laminar;
 |    \\\\/     M anipulation  |                                                 |
 \\*---------------------------------------------------------------------------*/
 FoamFile
-{{
+{{{{
     version     2.0;
     format      ascii;
     class       volScalarField;
     object      alpha.metal;
-}}
+}}}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 dimensions      [0 0 0 0 0 0 0];
@@ -293,25 +293,25 @@ dimensions      [0 0 0 0 0 0 0];
 internalField   uniform 0;
 
 boundaryField
-{{
+{{{{
     walls
-    {{
+    {{{{
         type            zeroGradient;
-    }}
+    }}}}
 
     inlet
-    {{
+    {{{{
         type            fixedValue;
         value           uniform 1;
-    }}
+    }}}}
 
     outlet
-    {{
+    {{{{
         type            inletOutlet;
         inletValue      uniform 0;
         value           uniform 0;
-    }}
-}}
+    }}}}
+}}}}
 
 // ************************************************************************* //
 """,
@@ -324,12 +324,12 @@ boundaryField
 |    \\\\/     M anipulation  |                                                 |
 \\*---------------------------------------------------------------------------*/
 FoamFile
-{{
+{{{{
     version     2.0;
     format      ascii;
     class       volVectorField;
     object      U;
-}}
+}}}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 dimensions      [0 1 -1 0 0 0 0];
@@ -337,24 +337,24 @@ dimensions      [0 1 -1 0 0 0 0];
 internalField   uniform (0 0 0);
 
 boundaryField
-{{
+{{{{
     walls
-    {{
+    {{{{
         type            noSlip;
-    }}
+    }}}}
 
     inlet
-    {{
+    {{{{
         type            fixedValue;
         value           uniform (0 0 0.5);
-    }}
+    }}}}
 
     outlet
-    {{
+    {{{{
         type            pressureInletOutletVelocity;
         value           uniform (0 0 0);
-    }}
-}}
+    }}}}
+}}}}
 
 // ************************************************************************* //
 """,
@@ -367,12 +367,12 @@ boundaryField
 |    \\\\/     M anipulation  |                                                 |
 \\*---------------------------------------------------------------------------*/
 FoamFile
-{{
+{{{{
     version     2.0;
     format      ascii;
     class       volScalarField;
     object      p_rgh;
-}}
+}}}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 dimensions      [1 -1 -2 0 0 0 0];
@@ -380,26 +380,26 @@ dimensions      [1 -1 -2 0 0 0 0];
 internalField   uniform 0;
 
 boundaryField
-{{
+{{{{
     walls
-    {{
+    {{{{
         type            fixedFluxPressure;
         value           uniform 0;
-    }}
+    }}}}
 
     inlet
-    {{
+    {{{{
         type            fixedFluxPressure;
         value           uniform 0;
-    }}
+    }}}}
 
     outlet
-    {{
+    {{{{
         type            totalPressure;
         p0              uniform 0;
         value           uniform 0;
-    }}
-}}
+    }}}}
+}}}}
 
 // ************************************************************************* //
 """
@@ -416,13 +416,13 @@ SOLIDIFICATION_TEMPLATE = {
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       dictionary;
     location    "system";
     object      controlDict;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 application     foamRun;
@@ -476,28 +476,28 @@ maxDeltaT       1;
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       dictionary;
     location    "system";
     object      fvSchemes;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 ddtSchemes
-{
+{{
     default         Euler;
-}
+}}
 
 gradSchemes
-{
+{{
     default         Gauss linear;
     limited         cellLimited Gauss linear 1;
-}
+}}
 
 divSchemes
-{
+{{
     default                             none;
     
     div(phi,alpha)                      Gauss vanLeer;
@@ -535,29 +535,29 @@ divSchemes
     
     div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
     div((nuEff*dev2(T(grad(U)))))       Gauss linear;
-}
+}}
 
 laplacianSchemes
-{
+{{
     default         Gauss linear corrected;
-}
+}}
 
 interpolationSchemes
-{
+{{
     default         linear;
-}
+}}
 
 snGradSchemes
-{
+{{
     default         corrected;
-}
+}}
 
 fluxRequired
-{
+{{
     default         no;
     p               ;
     alpha.metal     ;
-}
+}}
 
 // ************************************************************************* //
 """,
@@ -570,109 +570,109 @@ fluxRequired
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       dictionary;
     location    "system";
     object      fvSolution;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 solvers
-{
+{{
     "alpha.metal.*"
-    {
+    {{
         nAlphaCorr      2;
         nAlphaSubCycles 1;
         cAlpha          1;
-    }
+    }}
 
     ".*(rho|rhoFinal)"
-    {
+    {{
         solver          diagonal;
-    }
+    }}
 
     pcorr
-    {
+    {{
         solver          PCG;
         preconditioner  DIC;
         tolerance       1e-5;
         relTol          0;
-    }
+    }}
 
     p_rgh
-    {
+    {{
         solver          PCG;
         preconditioner  DIC;
         tolerance       1e-07;
         relTol          0.05;
-    }
+    }}
 
     p_rghFinal
-    {
+    {{
         $p_rgh;
         relTol          0;
-    }
+    }}
 
     p
-    {
+    {{
         solver          PCG;
         preconditioner  DIC;
         tolerance       1e-07;
         relTol          0.05;
-    }
+    }}
 
     pFinal
-    {
+    {{
         $p;
         relTol          0;
-    }
+    }}
 
     U
-    {
+    {{
         solver          smoothSolver;
         smoother        symGaussSeidel;
         tolerance       1e-06;
         relTol          0;
-    }
+    }}
 
     UFinal
-    {
+    {{
         $U;
         relTol          0;
-    }
+    }}
 
     "(T|e|h).*"
-    {
+    {{
         solver          smoothSolver;
         smoother        symGaussSeidel;
         tolerance       1e-07;
         relTol          0;
-    }
+    }}
 
     TFinal
-    {
+    {{
         $T;
         relTol          0;
-    }
-}
+    }}
+}}
 
 PIMPLE
-{
+{{
     momentumPredictor   yes;
     nOuterCorrectors    1;
     nCorrectors         3;
     nNonOrthogonalCorrectors 0;
-}
+}}
 
 relaxationFactors
-{
+{{
     equations
-    {
+    {{
         ".*"            1;
-    }
-}
+    }}
+}}
 
 // ************************************************************************* //
 """,
@@ -685,13 +685,13 @@ relaxationFactors
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       uniformDimensionedVectorField;
     location    "constant";
     object      g;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 dimensions      [0 1 -2 0 0 0 0];
@@ -708,13 +708,13 @@ value           (0 0 -9.81);
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       dictionary;
     location    "constant";
     object      momentumTransport;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 simulationType  laminar;
@@ -730,13 +730,13 @@ simulationType  laminar;
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       dictionary;
     location    "constant";
     object      phaseProperties;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 type    thermalPhaseChangeMultiphaseSystem;
@@ -744,14 +744,14 @@ type    thermalPhaseChangeMultiphaseSystem;
 phases  (metal air);
 
 metal
-{
+{{
     type            pureMovingPhaseModel;
-}
+}}
 
 air
-{
+{{
     type            pureStaticSolidPhaseModel;
-}
+}}
 
 sigma   0.07;
 
@@ -766,17 +766,17 @@ sigma   0.07;
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       dictionary;
     location    "constant";
     object      physicalProperties.metal;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 thermoType
-{
+{{
     type            heRhoThermo;
     mixture         pureMixture;
     transport       const;
@@ -784,29 +784,29 @@ thermoType
     equationOfState rhoConst;
     specie          specie;
     energy          sensibleEnthalpy;
-}
+}}
 
 mixture
-{
+{{
     specie
-    {
+    {{
         molWeight   26.98;
-    }
+    }}
     equationOfState
-    {
+    {{
         rho         {metal_density};
-    }
+    }}
     thermodynamics
-    {
+    {{
         Cp          {metal_cp};
         Hf          0;
-    }
+    }}
     transport
-    {
+    {{
         mu          {metal_viscosity};
         Pr          0.7;
-    }
-}
+    }}
+}}
 
 // ************************************************************************* //
 """,
@@ -819,17 +819,17 @@ mixture
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       dictionary;
     location    "constant";
     object      physicalProperties.air;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 thermoType
-{
+{{
     type            heRhoThermo;
     mixture         pureMixture;
     transport       const;
@@ -837,25 +837,25 @@ thermoType
     equationOfState perfectGas;
     specie          specie;
     energy          sensibleEnthalpy;
-}
+}}
 
 mixture
-{
+{{
     specie
-    {
+    {{
         molWeight   28.97;
-    }
+    }}
     thermodynamics
-    {
+    {{
         Cp          1007;
         Hf          0;
-    }
+    }}
     transport
-    {
+    {{
         mu          1.8e-05;
         Pr          0.7;
-    }
-}
+    }}
+}}
 
 // ************************************************************************* //
 """,
@@ -868,12 +868,12 @@ mixture
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       volScalarField;
     object      alpha.metal;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 dimensions      [0 0 0 0 0 0 0];
@@ -881,25 +881,25 @@ dimensions      [0 0 0 0 0 0 0];
 internalField   uniform 0;
 
 boundaryField
-{
+{{
     walls
-    {
+    {{
         type            zeroGradient;
-    }
+    }}
 
     inlet
-    {
+    {{
         type            fixedValue;
         value           uniform 1;
-    }
+    }}
 
     outlet
-    {
+    {{
         type            inletOutlet;
         inletValue      uniform 0;
         value           uniform 0;
-    }
-}
+    }}
+}}
 
 // ************************************************************************* //
 """,
@@ -912,12 +912,12 @@ boundaryField
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       volVectorField;
     object      U;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 dimensions      [0 1 -1 0 0 0 0];
@@ -925,24 +925,24 @@ dimensions      [0 1 -1 0 0 0 0];
 internalField   uniform (0 0 0);
 
 boundaryField
-{
+{{
     walls
-    {
+    {{
         type            noSlip;
-    }
+    }}
 
     inlet
-    {
+    {{
         type            fixedValue;
         value           uniform (0 0 0.5);
-    }
+    }}
 
     outlet
-    {
+    {{
         type            pressureInletOutletVelocity;
         value           uniform (0 0 0);
-    }
-}
+    }}
+}}
 
 // ************************************************************************* //
 """,
@@ -955,12 +955,12 @@ boundaryField
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       volScalarField;
     object      p_rgh;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 dimensions      [1 -1 -2 0 0 0 0];
@@ -968,26 +968,26 @@ dimensions      [1 -1 -2 0 0 0 0];
 internalField   uniform 0;
 
 boundaryField
-{
+{{
     walls
-    {
+    {{
         type            fixedFluxPressure;
         value           uniform 0;
-    }
+    }}
 
     inlet
-    {
+    {{
         type            fixedFluxPressure;
         value           uniform 0;
-    }
+    }}
 
     outlet
-    {
+    {{
         type            totalPressure;
         p0              uniform 0;
         value           uniform 0;
-    }
-}
+    }}
+}}
 
 // ************************************************************************* //
 """,
@@ -1000,12 +1000,12 @@ boundaryField
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       volScalarField;
     object      p;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 dimensions      [1 -1 -2 0 0 0 0];
@@ -1013,26 +1013,26 @@ dimensions      [1 -1 -2 0 0 0 0];
 internalField   uniform 101325;
 
 boundaryField
-{
+{{
     walls
-    {
+    {{
         type            calculated;
         value           uniform 101325;
-    }
+    }}
 
     inlet
-    {
+    {{
         type            calculated;
         value           uniform 101325;
-    }
+    }}
 
     outlet
-    {
+    {{
         type            totalPressure;
         p0              uniform 101325;
         value           uniform 101325;
-    }
-}
+    }}
+}}
 
 // ************************************************************************* //
 """,
@@ -1045,12 +1045,12 @@ boundaryField
 |    \\/     M anipulation  |                                                 |
 \*---------------------------------------------------------------------------*/
 FoamFile
-{
+{{
     version     2.0;
     format      ascii;
     class       volScalarField;
     object      T;
-}
+}}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
 dimensions      [0 0 0 1 0 0 0];
@@ -1058,24 +1058,24 @@ dimensions      [0 0 0 1 0 0 0];
 internalField   uniform {ambient_temp};
 
 boundaryField
-{
+{{
     walls
-    {
+    {{
         type            fixedValue;
         value           uniform {ambient_temp};
-    }
+    }}
 
     inlet
-    {
+    {{
         type            fixedValue;
         value           uniform {pouring_temp};
-    }
+    }}
 
     outlet
-    {
+    {{
         type            zeroGradient;
-    }
-}
+    }}
+}}
 
 // ************************************************************************* //
 """

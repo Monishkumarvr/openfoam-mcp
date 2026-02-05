@@ -126,7 +126,7 @@ class CaseBuilder:
         elif self.case_type == "continuous_casting":
             template = SOLIDIFICATION_TEMPLATE  # Would have dedicated template
         elif self.case_type == "die_casting":
-            template = MOLD_FILLING_TEMPLATE  # Would have dedicated template
+            template = SOLIDIFICATION_TEMPLATE  # Use thermal solver for die casting
         else:
             template = MOLD_FILLING_TEMPLATE
 
