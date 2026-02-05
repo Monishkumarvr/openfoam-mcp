@@ -49,7 +49,8 @@ class OpenFOAMClient:
         process = await asyncio.create_subprocess_shell(
             bash_cmd,
             stdout=asyncio.subprocess.PIPE if capture_output else None,
-            stderr=asyncio.subprocess.PIPE if capture_output else None
+            stderr=asyncio.subprocess.PIPE if capture_output else None,
+            executable='/bin/bash'  # Use bash explicitly for 'source' command
         )
 
         stdout, stderr = await process.communicate()
