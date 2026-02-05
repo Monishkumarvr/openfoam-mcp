@@ -508,15 +508,27 @@ mergeTolerance 1e-6;
 
         Args:
             case_name: Name of the case
-            **kwargs: Boundary condition parameters:
+            **kwargs: Boundary condition parameters (ALL TEMPERATURES IN KELVIN):
                 - inlet_velocity: Inlet velocity (m/s)
-                - inlet_temperature: Inlet temperature (K or °C, will convert)
-                - mold_wall_temperature: Mold wall temperature (K or °C, will convert)
-                - ambient_temperature: Ambient temperature (K or °C, will convert)
+                - inlet_temperature: Inlet temperature in KELVIN (OpenFOAM SI units)
+                - mold_wall_temperature: Mold wall temperature in KELVIN (OpenFOAM SI units)
+                - ambient_temperature: Ambient temperature in KELVIN (OpenFOAM SI units)
                 - heat_transfer_coefficient: Wall heat transfer coefficient (W/m²K)
 
         Returns:
             Dictionary with setup info
+
+        Note:
+            All temperatures MUST be in Kelvin (OpenFOAM native SI units).
+            No automatic Celsius-to-Kelvin conversion is performed.
+
+            Common casting temperatures:
+              - Room/ambient: 293-300 K (20-27°C)
+              - Mold preheat: 373-573 K (100-300°C)
+              - Aluminum pouring: 973-1073 K (700-800°C)
+              - Steel pouring: 1773-1873 K (1500-1600°C)
+
+            Values outside 200-3500 K are rejected with clear error messages.
         """
         case_dir = self.run_dir / case_name
 
@@ -526,15 +538,20 @@ mergeTolerance 1e-6;
         updated_files = []
         import re
 
-        # NO AUTO-CONVERSION - All temperatures must be in Kelvin
-        # Only convert if clearly Celsius (< 200 K would be unrealistic)
-        # This prevents double-conversion bugs
-        def to_kelvin(temp: float) -> float:
-            # Values < 200 are definitely Celsius (can't be Kelvin in casting)
+        # Validate temperature inputs (Kelvin only, no conversion)
+        def validate_temperature(temp: float, name: str) -> float:
+            """Validate temperature is in reasonable Kelvin range for casting."""
             if temp < 200:
-                return temp + 273.15
-            # Everything else assumed to be Kelvin
-            # Users should pass: 298 K, 573 K, 1023 K (not Celsius)
+                raise ValueError(
+                    f"{name} = {temp} K is too low. "
+                    f"Temperatures must be in Kelvin (not Celsius). "
+                    f"Did you mean {temp + 273.15} K ({temp}°C)?"
+                )
+            if temp > 3500:
+                raise ValueError(
+                    f"{name} = {temp} K is unrealistically high for casting. "
+                    f"Maximum is ~3500 K. Check units (must be Kelvin)."
+                )
             return temp
 
         # Update velocity field (0/U)
@@ -563,15 +580,15 @@ mergeTolerance 1e-6;
                     content = f.read()
 
                 if "inlet_temperature" in kwargs:
-                    T_inlet = to_kelvin(kwargs["inlet_temperature"])
+                    T_inlet = validate_temperature(kwargs["inlet_temperature"], "inlet_temperature")
                     content = self._update_boundary_value(content, "inlet", T_inlet)
 
                 if "mold_wall_temperature" in kwargs:
-                    T_wall = to_kelvin(kwargs["mold_wall_temperature"])
+                    T_wall = validate_temperature(kwargs["mold_wall_temperature"], "mold_wall_temperature")
                     content = self._update_boundary_value(content, "walls", T_wall)
 
                 if "ambient_temperature" in kwargs:
-                    T_ambient = to_kelvin(kwargs["ambient_temperature"])
+                    T_ambient = validate_temperature(kwargs["ambient_temperature"], "ambient_temperature")
                     # Update internalField
                     pattern = r'(internalField\s+uniform\s+)[0-9.eE+-]+(\s*;)'
                     content = re.sub(pattern, rf'\g<1>{T_ambient}\g<2>', content)
