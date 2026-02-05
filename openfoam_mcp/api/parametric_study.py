@@ -189,7 +189,7 @@ class ParametricStudyEngine:
 
         sim_result = await self.openfoam_client.run_simulation(
             case_name=new_case,
-            solver="interFoam",
+            solver=None,  # Auto-detect from controlDict
             parallel=False
         )
 

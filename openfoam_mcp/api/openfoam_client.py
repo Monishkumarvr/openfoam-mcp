@@ -156,10 +156,40 @@ class OpenFOAMClient:
 
         return stats
 
+    def _detect_solver_from_controldict(self, case_dir: Path) -> str:
+        """Detect which solver to use from controlDict.
+
+        Args:
+            case_dir: Case directory
+
+        Returns:
+            Solver name
+        """
+        control_dict = case_dir / "system" / "controlDict"
+
+        if not control_dict.exists():
+            return "interFoam"  # fallback
+
+        with open(control_dict, 'r') as f:
+            content = f.read()
+
+        # Check for OpenFOAM 11+ style (foamRun with solver directive)
+        if 'application' in content and 'foamRun' in content:
+            return "foamRun"  # foamRun will read solver directive from controlDict
+
+        # Check for traditional application directive
+        import re
+        app_match = re.search(r'application\s+(\w+);', content)
+        if app_match:
+            return app_match.group(1)
+
+        # Fallback
+        return "interFoam"
+
     async def run_simulation(
         self,
         case_name: str,
-        solver: str = "interFoam",
+        solver: Optional[str] = None,
         end_time: Optional[float] = None,
         write_interval: Optional[float] = None,
         parallel: bool = False,
@@ -169,7 +199,7 @@ class OpenFOAMClient:
 
         Args:
             case_name: Name of the case
-            solver: Solver to use
+            solver: Solver to use (if None, auto-detect from controlDict)
             end_time: Simulation end time
             write_interval: Write interval
             parallel: Run in parallel
@@ -188,13 +218,10 @@ class OpenFOAMClient:
                 write_interval=write_interval
             )
 
-        # Check if controlDict uses foamRun (OpenFOAM 11 style)
-        control_dict = case_dir / "system" / "controlDict"
-        if control_dict.exists():
-            with open(control_dict, 'r') as f:
-                content = f.read()
-                if 'application' in content and 'foamRun' in content:
-                    solver = "foamRun"  # Override solver to use foamRun
+        # Auto-detect solver if not specified
+        if solver is None:
+            solver = self._detect_solver_from_controldict(case_dir)
+            logger.info(f"Auto-detected solver: {solver}")
 
         if parallel:
             # Decompose case

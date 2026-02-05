@@ -233,9 +233,8 @@ async def list_tools() -> list[Tool]:
                     },
                     "solver": {
                         "type": "string",
-                        "enum": ["interFoam", "interPhaseChangeFoam", "compressibleInterFoam", "buoyantBoussinesqPimpleFoam"],
-                        "default": "interFoam",
-                        "description": "OpenFOAM solver to use"
+                        "enum": ["interFoam", "interPhaseChangeFoam", "compressibleInterFoam", "buoyantBoussinesqPimpleFoam", "foamRun"],
+                        "description": "OpenFOAM solver to use (auto-detected from controlDict if not specified)"
                     },
                     "end_time": {
                         "type": "number",
@@ -593,10 +592,10 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent | ImageCo
 
         elif name == "run_simulation":
             case_name = arguments["case_name"]
-            solver = arguments.get("solver", "interFoam")
+            solver = arguments.get("solver")  # None if not specified -> auto-detect
             parallel = arguments.get("parallel", False)
 
-            logger.info(f"Running simulation for {case_name} with {solver}")
+            logger.info(f"Running simulation for {case_name} with solver={solver or 'auto-detect'}")
 
             result = await openfoam_client.run_simulation(
                 case_name=case_name,
@@ -610,7 +609,7 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent | ImageCo
             return [TextContent(
                 type="text",
                 text=f"✅ Simulation completed for {case_name}\n"
-                     f"Solver: {solver}\n"
+                     f"Solver: {solver or 'auto-detected'}\n"
                      f"Status: {result.get('status', 'completed')}\n"
                      f"Final time: {result.get('final_time', 'N/A')}s\n"
                      f"Output: {result.get('output_dir', 'N/A')}"
