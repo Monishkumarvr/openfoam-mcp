@@ -145,7 +145,8 @@ class CaseBuilder:
                 mold_density=mold_props["density"],
                 mold_k=mold_props["thermal_conductivity"],
                 mold_cp=mold_props["specific_heat"],
-                ambient_temp=300
+                mold_temp=573,  # Default mold temperature: 573 K (300°C) - typical for die casting
+                ambient_temp=300  # Ambient temperature: 300 K (27°C)
             )
             files[file_path] = content
 

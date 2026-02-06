@@ -585,27 +585,40 @@ mergeTolerance 1e-6;
 
                 if "mold_wall_temperature" in kwargs:
                     T_wall = validate_temperature(kwargs["mold_wall_temperature"], "mold_wall_temperature")
+                    # Update wall boundary condition
                     content = self._update_boundary_value(content, "walls", T_wall)
+
+                    # CRITICAL: Set internalField to mold temperature (domain starts at mold temp)
+                    pattern = r'(internalField\s+uniform\s+)[0-9.eE+-]+(\s*;)'
+                    content = re.sub(pattern, rf'\g<1>{T_wall}\g<2>', content)
+
+                    # Update metal Tref to match mold temperature
+                    # For hConst: h = Cp * (T - Tref) + Hf
+                    # When domain starts at T_wall, Tref should be T_wall for sensible initial enthalpy
+                    metal_path = case_dir / "constant" / "physicalProperties.metal"
+                    if metal_path.exists():
+                        with open(metal_path, 'r') as f:
+                            metal_content = f.read()
+                        metal_content = self._update_dict_value(metal_content, "Tref", T_wall)
+                        with open(metal_path, 'w') as f:
+                            f.write(metal_content)
+                        if "constant/physicalProperties.metal" not in updated_files:
+                            updated_files.append("constant/physicalProperties.metal")
 
                 if "ambient_temperature" in kwargs:
                     T_ambient = validate_temperature(kwargs["ambient_temperature"], "ambient_temperature")
-                    # Update internalField
-                    pattern = r'(internalField\s+uniform\s+)[0-9.eE+-]+(\s*;)'
-                    content = re.sub(pattern, rf'\g<1>{T_ambient}\g<2>', content)
 
-                    # CRITICAL: Also update Tref in physicalProperties to match internalField
-                    # This prevents negative enthalpy errors at initialization
-                    for phase_file in ["physicalProperties.metal", "physicalProperties.gas"]:
-                        phase_path = case_dir / "constant" / phase_file
-                        if phase_path.exists():
-                            with open(phase_path, 'r') as f:
-                                phase_content = f.read()
-                            # Update Tref to match ambient temperature
-                            phase_content = self._update_dict_value(phase_content, "Tref", T_ambient)
-                            with open(phase_path, 'w') as f:
-                                f.write(phase_content)
-                            if phase_file not in updated_files:
-                                updated_files.append(f"constant/{phase_file}")
+                    # Update gas Tref to ambient temperature
+                    # Gas properties reference ambient conditions
+                    gas_path = case_dir / "constant" / "physicalProperties.gas"
+                    if gas_path.exists():
+                        with open(gas_path, 'r') as f:
+                            gas_content = f.read()
+                        gas_content = self._update_dict_value(gas_content, "Tref", T_ambient)
+                        with open(gas_path, 'w') as f:
+                            f.write(gas_content)
+                        if "constant/physicalProperties.gas" not in updated_files:
+                            updated_files.append("constant/physicalProperties.gas")
 
                 with open(t_file, 'w') as f:
                     f.write(content)

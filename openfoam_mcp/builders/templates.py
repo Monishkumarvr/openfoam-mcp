@@ -802,7 +802,7 @@ mixture
     {{
         Cp          {metal_cp};
         Hf          0;
-        Tref        {ambient_temp};
+        Tref        {mold_temp};
     }}
     transport
     {{
@@ -1059,14 +1059,14 @@ FoamFile
 
 dimensions      [0 0 0 1 0 0 0];
 
-internalField   uniform {ambient_temp};
+internalField   uniform {mold_temp};
 
 boundaryField
 {{
     walls
     {{
         type            fixedValue;
-        value           uniform {ambient_temp};
+        value           uniform {mold_temp};
     }}
 
     inlet
