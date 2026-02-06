@@ -646,10 +646,11 @@ solvers
 
     U
     {{
-        solver          smoothSolver;
-        smoother        symGaussSeidel;
+        solver          PBiCGStab;
+        preconditioner  DILU;
         tolerance       1e-06;
-        relTol          0;
+        relTol          0.1;
+        maxIter         50;
     }}
 
     UFinal
@@ -660,10 +661,11 @@ solvers
 
     "(T|e|h).*"
     {{
-        solver          smoothSolver;
-        smoother        symGaussSeidel;
+        solver          PBiCGStab;
+        preconditioner  DILU;
         tolerance       1e-07;
-        relTol          0;
+        relTol          0.1;
+        maxIter         50;
     }}
 
     TFinal
@@ -680,7 +682,8 @@ PIMPLE
 
     // Outer correctors for pressure-velocity-energy coupling
     // Increased for compressible thermal simulations
-    nOuterCorrectors    2;
+    // 3 correctors needed for difficult casting problems
+    nOuterCorrectors    3;
 
     // Pressure correctors per outer loop
     nCorrectors         3;
