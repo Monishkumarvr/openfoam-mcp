@@ -1181,13 +1181,13 @@ FoamFile
 
 solidificationHeat
 {{
-    type            scalarCodedSource;
+    type            coded;
     active          yes;
     name            solidificationSource;
 
     selectionMode   all;
 
-    fields          (h);
+    field           h;
 
     codeInclude
     #{{
@@ -1242,13 +1242,13 @@ solidificationHeat
 
 mushyZoneDrag
 {{
-    type            vectorCodedSource;
+    type            coded;
     active          yes;
     name            mushyZoneSource;
 
     selectionMode   all;
 
-    fields          (U);
+    field           U;
 
     codeInclude
     #{{
