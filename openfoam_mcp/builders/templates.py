@@ -439,9 +439,9 @@ stopAt          endTime;
 
 endTime         100;
 
-// CRITICAL: Start with very small timestep for stability
-// Solver will automatically increase based on Courant limits
-deltaT          1e-6;
+// CRITICAL: Ultra-small initial timestep for solidification stability
+// With source terms and phase change, need extremely conservative start
+deltaT          1e-7;
 
 writeControl    adjustableRunTime;
 
@@ -464,20 +464,19 @@ runTimeModifiable yes;
 // Adaptive timestep control for stability
 adjustTimeStep  yes;
 
-// Maximum Courant number - conservative for compressibleVoF
-// Keep ≤ 0.5 for thermal+VOF+compressible simulations
-maxCo           0.25;
+// Very conservative Courant limits for solidification
+// Source terms require tighter stability constraints
+maxCo           0.1;
 
-// Maximum interface Courant number
-// Lower than maxCo for better interface tracking
-maxAlphaCo      0.25;
+// Very conservative interface Courant for VOF stability
+maxAlphaCo      0.1;
 
-// Maximum timestep - limit for casting simulations
-// Prevents missing transient thermal features
-maxDeltaT       0.001;
+// Maximum timestep - limit for solidification simulations
+// Prevents missing solidification transients
+maxDeltaT       1e-4;
 
-// Maximum change in timestep between iterations
-// Prevents sudden jumps that cause instability
+// Maximum diffusion number for thermal stability
+// Critical with latent heat sources
 maxDi           10;
 
 // ************************************************************************* //
@@ -681,57 +680,55 @@ PIMPLE
     momentumPredictor   yes;
 
     // Outer correctors for pressure-velocity-energy coupling
-    // Increased for compressible thermal simulations
-    // 3 correctors needed for difficult casting problems
-    nOuterCorrectors    3;
+    // Increased to 5 for solidification with source terms
+    nOuterCorrectors    5;
 
     // Pressure correctors per outer loop
     nCorrectors         3;
 
-    // Non-orthogonal correctors (0 for orthogonal meshes)
-    nNonOrthogonalCorrectors 0;
+    // Non-orthogonal correctors (increase if mesh has issues)
+    nNonOrthogonalCorrectors 1;
 
     // Energy correctors for temperature equation
-    // Critical for thermal simulations
-    nEnergyCorrectors   1;
+    // 2 iterations handle latent heat source term coupling
+    nEnergyCorrectors   2;
 
-    // Tolerance for outer correctors
-    // Tighter for production simulations
+    // Tighter tolerances for thermal solidification
     outerCorrectorResidualControl
     {{
         p_rgh
         {{
-            tolerance   1e-4;
+            tolerance   1e-5;
             relTol      0;
         }}
         U
         {{
-            tolerance   1e-4;
+            tolerance   1e-5;
             relTol      0;
         }}
         "(e|h|T)"
         {{
-            tolerance   1e-4;
+            tolerance   1e-6;
             relTol      0;
         }}
     }}
 }}
 
-// Under-relaxation factors for stability
-// Critical for compressible thermal VOF
+// Aggressive under-relaxation for solidification stability
+// Critical for handling latent heat and mushy zone sources
 relaxationFactors
 {{
     fields
     {{
-        p_rgh           0.7;
-        p               0.7;
+        p_rgh           0.5;
+        p               0.5;
     }}
 
     equations
     {{
-        U               0.7;
-        "(e|h|T)"       0.7;
-        ".*"            0.7;
+        U               0.5;
+        "(e|h|T)"       0.3;
+        ".*"            0.5;
     }}
 }}
 
@@ -841,7 +838,7 @@ thermoType
     type            heRhoThermo;
     mixture         pureMixture;
     transport       const;
-    thermo          hConst;
+    thermo          janaf;
     equationOfState rhoConst;
     specie          specie;
     energy          sensibleEnthalpy;
@@ -859,9 +856,29 @@ mixture
     }}
     thermodynamics
     {{
-        Cp          {metal_cp};
-        Hf          0;
-        Tref        {mold_temp};
+        Tlow        298;
+        Thigh       2000;
+        Tcommon     933.47;
+        lowCpCoeffs
+        (
+            3.5975527e+00
+            -7.5258037e-03
+            1.8167697e-05
+            -1.1983386e-08
+            2.6685492e-12
+            -4.4030967e+03
+            2.9863235e+00
+        );
+        highCpCoeffs
+        (
+            2.8063068e+00
+            4.5416638e-04
+            -1.4954487e-07
+            2.3087899e-11
+            -1.3428869e-15
+            -3.8628130e+03
+            5.4171021e+00
+        );
     }}
     transport
     {{
@@ -1140,6 +1157,185 @@ boundaryField
     {{
         type            zeroGradient;
     }}
+}}
+
+// ************************************************************************* //
+""",
+
+    "system/fvOptions": """/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  11                                    |
+|   \\  /    A nd           | Website:  www.openfoam.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      fvOptions;
+}}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+solidificationHeat
+{{
+    type            scalarCodedSource;
+    active          yes;
+    name            solidificationSource;
+
+    selectionMode   all;
+
+    fields          (h);
+
+    codeInclude
+    #{{
+        #include "fvCFD.H"
+    #}};
+
+    codeCorrect
+    #{{
+        // Do nothing
+    #}};
+
+    codeAddSup
+    #{{
+        const volScalarField& T = mesh().lookupObject<volScalarField>("T");
+        const volScalarField& alpha = mesh().lookupObject<volScalarField>("alpha.metal");
+
+        // Aluminum solidification properties
+        const scalar Tsolidus = {solidus_temp};   // K
+        const scalar Tliquidus = {liquidus_temp}; // K
+        const scalar L = {latent_heat};           // J/kg
+        const scalar rho = {metal_density};       // kg/m³
+
+        scalarField& hSource = eqn.source();
+        const scalarField& V = mesh().V();
+
+        // Calculate liquid fraction
+        scalarField fl = (T.primitiveField() - Tsolidus) / (Tliquidus - Tsolidus);
+        fl = max(min(fl, 1.0), 0.0);
+
+        // Solidification rate approximation
+        const scalar deltaT = mesh().time().deltaTValue();
+
+        forAll(hSource, i)
+        {{
+            if (alpha[i] > 0.5)  // Only in metal phase
+            {{
+                if (T[i] < Tliquidus && T[i] > Tsolidus)
+                {{
+                    // In mushy zone - add latent heat source
+                    // Negative because solidification releases heat
+                    hSource[i] -= rho * L * (1.0 - fl[i]) * V[i] / deltaT;
+                }}
+            }}
+        }}
+    #}};
+
+    codeSetValue
+    #{{
+        // Do nothing
+    #}};
+}}
+
+mushyZoneDrag
+{{
+    type            vectorCodedSource;
+    active          yes;
+    name            mushyZoneSource;
+
+    selectionMode   all;
+
+    fields          (U);
+
+    codeInclude
+    #{{
+        #include "fvCFD.H"
+    #}};
+
+    codeCorrect
+    #{{
+        // Do nothing
+    #}};
+
+    codeAddSup
+    #{{
+        const volScalarField& T = mesh().lookupObject<volScalarField>("T");
+        const volScalarField& alpha = mesh().lookupObject<volScalarField>("alpha.metal");
+        const volVectorField& U = mesh().lookupObject<volVectorField>("U");
+
+        // Aluminum solidification properties
+        const scalar Tsolidus = {solidus_temp};
+        const scalar Tliquidus = {liquidus_temp};
+        const scalar mu = {metal_viscosity};  // Pa·s
+        const scalar K0 = 1e-7;     // Reference permeability m²
+        const scalar Amush = 1e5;   // Mushy zone constant
+
+        vectorField& USource = eqn.source();
+        const scalarField& V = mesh().V();
+
+        // Calculate liquid fraction
+        scalarField fl = (T.primitiveField() - Tsolidus) / (Tliquidus - Tsolidus);
+        fl = max(min(fl, 1.0), 0.0);
+
+        forAll(USource, i)
+        {{
+            if (alpha[i] > 0.5)  // Only in metal phase
+            {{
+                if (fl[i] < 0.999)  // Not fully liquid
+                {{
+                    // Carman-Kozeny permeability model
+                    scalar K = K0 * pow3(fl[i]) / (pow2(1.0 - fl[i]) + 1e-6);
+
+                    // Darcy drag: F = -mu/K * U
+                    scalar drag = mu / (K + 1e-12);
+
+                    // Add drag term (momentum sink)
+                    USource[i] -= drag * U[i] * V[i];
+                }}
+            }}
+        }}
+    #}};
+
+    codeSetValue
+    #{{
+        // Do nothing
+    #}};
+}}
+
+// ************************************************************************* //
+""",
+
+    "system/fvConstraints": """/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  11                                    |
+|   \\  /    A nd           | Website:  www.openfoam.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      fvConstraints;
+}}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+temperatureLimits
+{{
+    type            limitTemperature;
+    active          yes;
+
+    selectionMode   all;
+
+    min             200;    // Minimum physical temperature (K)
+    max             2000;   // Maximum (above Al boiling point at 2743 K)
+
+    phase           alpha.metal;
 }}
 
 // ************************************************************************* //
