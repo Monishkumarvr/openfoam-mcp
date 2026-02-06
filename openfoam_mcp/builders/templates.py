@@ -439,7 +439,9 @@ stopAt          endTime;
 
 endTime         100;
 
-deltaT          0.001;
+// CRITICAL: Start with very small timestep for stability
+// Solver will automatically increase based on Courant limits
+deltaT          1e-6;
 
 writeControl    adjustableRunTime;
 
@@ -447,7 +449,7 @@ writeInterval   5;
 
 purgeWrite      0;
 
-writeFormat     ascii;
+writeFormat     binary;
 
 writePrecision  6;
 
@@ -459,13 +461,24 @@ timePrecision   6;
 
 runTimeModifiable yes;
 
+// Adaptive timestep control for stability
 adjustTimeStep  yes;
 
-maxCo           0.5;
+// Maximum Courant number - conservative for compressibleVoF
+// Keep ≤ 0.5 for thermal+VOF+compressible simulations
+maxCo           0.25;
 
-maxAlphaCo      0.5;
+// Maximum interface Courant number
+// Lower than maxCo for better interface tracking
+maxAlphaCo      0.25;
 
-maxDeltaT       1;
+// Maximum timestep - limit for casting simulations
+// Prevents missing transient thermal features
+maxDeltaT       0.001;
+
+// Maximum change in timestep between iterations
+// Prevents sudden jumps that cause instability
+maxDi           10;
 
 // ************************************************************************* //
 """,
@@ -662,17 +675,60 @@ solvers
 
 PIMPLE
 {{
+    // Enable momentum predictor for compressible flow
     momentumPredictor   yes;
-    nOuterCorrectors    1;
+
+    // Outer correctors for pressure-velocity-energy coupling
+    // Increased for compressible thermal simulations
+    nOuterCorrectors    2;
+
+    // Pressure correctors per outer loop
     nCorrectors         3;
+
+    // Non-orthogonal correctors (0 for orthogonal meshes)
     nNonOrthogonalCorrectors 0;
+
+    // Energy correctors for temperature equation
+    // Critical for thermal simulations
+    nEnergyCorrectors   1;
+
+    // Tolerance for outer correctors
+    // Tighter for production simulations
+    outerCorrectorResidualControl
+    {{
+        p_rgh
+        {{
+            tolerance   1e-4;
+            relTol      0;
+        }}
+        U
+        {{
+            tolerance   1e-4;
+            relTol      0;
+        }}
+        "(e|h|T)"
+        {{
+            tolerance   1e-4;
+            relTol      0;
+        }}
+    }}
 }}
 
+// Under-relaxation factors for stability
+// Critical for compressible thermal VOF
 relaxationFactors
 {{
+    fields
+    {{
+        p_rgh           0.7;
+        p               0.7;
+    }}
+
     equations
     {{
-        ".*"            1;
+        U               0.7;
+        "(e|h|T)"       0.7;
+        ".*"            0.7;
     }}
 }}
 
