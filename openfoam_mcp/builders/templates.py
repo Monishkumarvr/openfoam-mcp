@@ -1162,7 +1162,8 @@ solidification
 
     // Solidification temperature (for pure metal, liquidus = solidus)
     // For alloys with mushy zone, use average: (Tsolidus + Tliquidus)/2
-    Tmelt           {liquidus_temp};
+    Tsol            {solidus_temp};
+    Tliq            {liquidus_temp};
 
     // Latent heat of fusion [J/kg]
     L               {latent_heat};
