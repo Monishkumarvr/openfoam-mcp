@@ -1189,11 +1189,6 @@ solidificationHeat
 
     field           h;
 
-    codeInclude
-    #{{
-        #include "fvCFD.H"
-    #}};
-
     codeCorrect
     #{{
         // Do nothing
@@ -1249,11 +1244,6 @@ mushyZoneDrag
     selectionMode   all;
 
     field           U;
-
-    codeInclude
-    #{{
-        #include "fvCFD.H"
-    #}};
 
     codeCorrect
     #{{
