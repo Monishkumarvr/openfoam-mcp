@@ -834,7 +834,7 @@ thermoType
     type            heRhoThermo;
     mixture         pureMixture;
     transport       const;
-    thermo          hConst;
+    thermo          janaf;
     equationOfState rhoConst;
     specie          specie;
     energy          sensibleEnthalpy;
@@ -852,8 +852,29 @@ mixture
     }}
     thermodynamics
     {{
-        Cp          {metal_cp};
-        Hf          0;
+        Tlow        298;
+        Thigh       2000;
+        Tcommon     933.47;
+        lowCpCoeffs
+        (
+            3.5975527e+00
+            -7.5258037e-03
+            1.8167697e-05
+            -1.1983386e-08
+            2.6685492e-12
+            -4.4030967e+03
+            2.9863235e+00
+        );
+        highCpCoeffs
+        (
+            2.8063068e+00
+            4.5416638e-04
+            -1.4954487e-07
+            2.3087899e-11
+            -1.3428869e-15
+            -3.8628130e+03
+            5.4171021e+00
+        );
     }}
     transport
     {{
@@ -1182,7 +1203,7 @@ solidification
 
     // Under-relaxation factor for source term (0-1)
     // Lower values = more stable, slower convergence
-    relax           0.9;
+    relax           0.1;
 
     // Mushy zone constant (Voller-Prakash parameter)
     // Typical range: 1e5 to 1e7
