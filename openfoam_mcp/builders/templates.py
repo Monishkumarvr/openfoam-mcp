@@ -895,7 +895,7 @@ thermoType
     type            heRhoThermo;
     mixture         pureMixture;
     transport       const;
-    thermo          hConst;
+    thermo          janaf;
     equationOfState perfectGas;
     specie          specie;
     energy          sensibleEnthalpy;
@@ -909,9 +909,11 @@ mixture
     }}
     thermodynamics
     {{
-        Cp          1007;
-        Hf          0;
-        Tref        {ambient_temp};
+        Tlow        200;
+        Thigh       5000;
+        Tcommon     1000;
+        highCpCoeffs (3.10383 0.00156927 -5.22523e-07 8.06527e-11 -4.60363e-15 -6892.54 5.21744);
+        lowCpCoeffs  (3.53318 7.81943e-05 5.77097e-07 6.68595e-10 -6.30433e-13 -6964.71 3.15336);
     }}
     transport
     {{
