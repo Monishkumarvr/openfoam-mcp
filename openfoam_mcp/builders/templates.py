@@ -1169,7 +1169,9 @@ solidification
     L               {latent_heat};
 
     // Use thermophysical properties from constant/physicalProperties.metal
-    thermoMode      thermo;
+    thermoMode      lookup;
+    rho             rho.metal;
+    Cp              Cp.metal;
 
     // Reference (solid) density [kg/m³]
     rhoRef          {metal_density};
