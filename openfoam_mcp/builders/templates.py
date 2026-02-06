@@ -1277,7 +1277,9 @@ mushyZoneDrag
                 if (fl[i] < 0.999)  // Not fully liquid
                 {{
                     // Carman-Kozeny permeability model
-                    scalar K = K0 * pow3(fl[i]) / (pow2(1.0 - fl[i]) + 1e-6);
+                    scalar flCubed = fl[i] * fl[i] * fl[i];
+                    scalar solidFrac = 1.0 - fl[i];
+                    scalar K = K0 * flCubed / (solidFrac * solidFrac + 1e-6);
 
                     // Darcy drag: F = -mu/K * U
                     scalar drag = mu / (K + 1e-12);
