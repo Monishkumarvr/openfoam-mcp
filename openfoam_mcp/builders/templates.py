@@ -1326,8 +1326,6 @@ temperatureLimits
 
     min             200;    // Minimum physical temperature (K)
     max             2000;   // Maximum (above Al boiling point at 2743 K)
-
-    phase           alpha.metal;
 }}
 
 // ************************************************************************* //
