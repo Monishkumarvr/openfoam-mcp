@@ -439,8 +439,9 @@ stopAt          endTime;
 
 endTime         100;
 
-// Initial timestep for solidification
-deltaT          1e-5;
+// CRITICAL: Ultra-small initial timestep for solidification stability
+// With source terms and phase change, need extremely conservative start
+deltaT          1e-7;
 
 writeControl    adjustableRunTime;
 
@@ -460,19 +461,22 @@ timePrecision   6;
 
 runTimeModifiable yes;
 
-// Adaptive timestep control
+// Adaptive timestep control for stability
 adjustTimeStep  yes;
 
-// Courant limits for solidification (semi-implicit source is stable)
-maxCo           0.5;
+// Very conservative Courant limits for solidification
+// Source terms require tighter stability constraints
+maxCo           0.1;
 
-// Interface Courant for VOF stability
-maxAlphaCo      0.5;
+// Very conservative interface Courant for VOF stability
+maxAlphaCo      0.1;
 
-// Maximum timestep - prevents missing transients
-maxDeltaT       0.1;
+// Maximum timestep - limit for solidification simulations
+// Prevents missing solidification transients
+maxDeltaT       1e-4;
 
 // Maximum diffusion number for thermal stability
+// Critical with latent heat sources
 maxDi           10;
 
 // ************************************************************************* //
@@ -710,21 +714,21 @@ PIMPLE
     }}
 }}
 
-// Under-relaxation for solidification stability
-// Optimized for built-in solidificationMeltingSource
+// Aggressive under-relaxation for solidification stability
+// Critical for handling latent heat and mushy zone sources
 relaxationFactors
 {{
     fields
     {{
-        p_rgh           0.7;
-        p               0.7;
+        p_rgh           0.5;
+        p               0.5;
     }}
 
     equations
     {{
-        U               0.7;
-        "(e|h|T)"       0.6;
-        ".*"            0.7;
+        U               0.5;
+        "(e|h|T)"       0.3;
+        ".*"            0.5;
     }}
 }}
 
@@ -834,7 +838,7 @@ thermoType
     type            heRhoThermo;
     mixture         pureMixture;
     transport       const;
-    thermo          hConst;
+    thermo          janaf;
     equationOfState rhoConst;
     specie          specie;
     energy          sensibleEnthalpy;
@@ -852,8 +856,29 @@ mixture
     }}
     thermodynamics
     {{
-        Cp          {metal_specific_heat};
-        Hf          0;
+        Tlow        298;
+        Thigh       2000;
+        Tcommon     933.47;
+        lowCpCoeffs
+        (
+            3.5975527e+00
+            -7.5258037e-03
+            1.8167697e-05
+            -1.1983386e-08
+            2.6685492e-12
+            -4.4030967e+03
+            2.9863235e+00
+        );
+        highCpCoeffs
+        (
+            2.8063068e+00
+            4.5416638e-04
+            -1.4954487e-07
+            2.3087899e-11
+            -1.3428869e-15
+            -3.8628130e+03
+            5.4171021e+00
+        );
     }}
     transport
     {{
@@ -887,7 +912,7 @@ thermoType
     type            heRhoThermo;
     mixture         pureMixture;
     transport       const;
-    thermo          hConst;
+    thermo          janaf;
     equationOfState perfectGas;
     specie          specie;
     energy          sensibleEnthalpy;
@@ -901,8 +926,11 @@ mixture
     }}
     thermodynamics
     {{
-        Cp          1005;
-        Hf          0;
+        Tlow        200;
+        Thigh       5000;
+        Tcommon     1000;
+        highCpCoeffs (3.10383 0.00156927 -5.22523e-07 8.06527e-11 -4.60363e-15 -6892.54 5.21744);
+        lowCpCoeffs  (3.53318 7.81943e-05 5.77097e-07 6.68595e-10 -6.30433e-13 -6964.71 3.15336);
     }}
     transport
     {{
@@ -1151,44 +1179,153 @@ FoamFile
 }}
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-// Built-in OpenFOAM solidification model based on Voller-Prakash (1987)
-// enthalpy-porosity method - production grade, numerically stable
-solidification
+solidificationHeat
 {{
-    type            solidificationMeltingSource;
+    type            coded;
+    active          yes;
+    name            solidificationSource;
+
+    selectionMode   all;
+
+    field           h;
+
+    codeCorrect
+    #{{
+        // Do nothing
+    #}};
+
+    codeAddSup
+    #{{
+        const volScalarField& T = mesh().lookupObject<volScalarField>("T");
+        const volScalarField& alpha = mesh().lookupObject<volScalarField>("alpha.metal");
+
+        // Aluminum solidification properties
+        const scalar Tsolidus = {solidus_temp};   // K
+        const scalar Tliquidus = {liquidus_temp}; // K
+        const scalar L = {latent_heat};           // J/kg
+        const scalar rho = {metal_density};       // kg/m³
+
+        scalarField& hSource = eqn.source();
+        const scalarField& V = mesh().V();
+
+        // Calculate liquid fraction
+        scalarField fl = (T.primitiveField() - Tsolidus) / (Tliquidus - Tsolidus);
+        fl = max(min(fl, 1.0), 0.0);
+
+        // Solidification rate approximation
+        const scalar deltaT = mesh().time().deltaTValue();
+
+        forAll(hSource, i)
+        {{
+            if (alpha[i] > 0.5)  // Only in metal phase
+            {{
+                if (T[i] < Tliquidus && T[i] > Tsolidus)
+                {{
+                    // In mushy zone - add latent heat source
+                    // Negative because solidification releases heat
+                    hSource[i] -= rho * L * (1.0 - fl[i]) * V[i] / deltaT;
+                }}
+            }}
+        }}
+    #}};
+
+    codeSetValue
+    #{{
+        // Do nothing
+    #}};
+}}
+
+mushyZoneDrag
+{{
+    type            coded;
+    active          yes;
+    name            mushyZoneSource;
+
+    selectionMode   all;
+
+    field           U;
+
+    codeCorrect
+    #{{
+        // Do nothing
+    #}};
+
+    codeAddSup
+    #{{
+        const volScalarField& T = mesh().lookupObject<volScalarField>("T");
+        const volScalarField& alpha = mesh().lookupObject<volScalarField>("alpha.metal");
+        const volVectorField& U = mesh().lookupObject<volVectorField>("U");
+
+        // Aluminum solidification properties
+        const scalar Tsolidus = {solidus_temp};
+        const scalar Tliquidus = {liquidus_temp};
+        const scalar mu = {metal_viscosity};  // Pa·s
+        const scalar K0 = 1e-7;     // Reference permeability m²
+        const scalar Amush = 1e5;   // Mushy zone constant
+
+        vectorField& USource = eqn.source();
+        const scalarField& V = mesh().V();
+
+        // Calculate liquid fraction
+        scalarField fl = (T.primitiveField() - Tsolidus) / (Tliquidus - Tsolidus);
+        fl = max(min(fl, 1.0), 0.0);
+
+        forAll(USource, i)
+        {{
+            if (alpha[i] > 0.5)  // Only in metal phase
+            {{
+                if (fl[i] < 0.999)  // Not fully liquid
+                {{
+                    // Carman-Kozeny permeability model
+                    scalar flCubed = fl[i] * fl[i] * fl[i];
+                    scalar solidFrac = 1.0 - fl[i];
+                    scalar K = K0 * flCubed / (solidFrac * solidFrac + 1e-6);
+
+                    // Darcy drag: F = -mu/K * U
+                    scalar drag = mu / (K + 1e-12);
+
+                    // Add drag term (momentum sink)
+                    USource[i] -= drag * U[i] * V[i];
+                }}
+            }}
+        }}
+    #}};
+
+    codeSetValue
+    #{{
+        // Do nothing
+    #}};
+}}
+
+// ************************************************************************* //
+""",
+
+    "system/fvConstraints": """/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  11                                    |
+|   \\  /    A nd           | Website:  www.openfoam.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      fvConstraints;
+}}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+temperatureLimits
+{{
+    type            limitTemperature;
     active          yes;
 
     selectionMode   all;
 
-    // Solidification temperature (for pure metal, liquidus = solidus)
-    // For alloys with mushy zone, use average: (Tsolidus + Tliquidus)/2
-    Tmelt           {liquidus_temp};
-
-    // Latent heat of fusion [J/kg]
-    L               {latent_heat};
-
-    // Use thermophysical properties from constant/physicalProperties.metal
-    thermoMode      thermo;
-
-    // Reference (solid) density [kg/m³]
-    rhoRef          {metal_density};
-
-    // Thermal expansion coefficient [1/K]
-    // For aluminum: ~23.1e-6 K⁻¹
-    beta            2.31e-5;
-
-    // Under-relaxation factor for source term (0-1)
-    // Lower values = more stable, slower convergence
-    relax           0.9;
-
-    // Mushy zone constant (Voller-Prakash parameter)
-    // Typical range: 1e5 to 1e7
-    // Higher values = stronger velocity damping in mushy zone
-    Cu              1e5;
-
-    // Smoothing parameter for liquid fraction calculation
-    // Prevents division by zero, typical: 0.001
-    q               0.001;
+    min             200;    // Minimum physical temperature (K)
+    max             2000;   // Maximum (above Al boiling point at 2743 K)
 }}
 
 // ************************************************************************* //
