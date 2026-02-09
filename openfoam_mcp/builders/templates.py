@@ -439,9 +439,8 @@ stopAt          endTime;
 
 endTime         100;
 
-// CRITICAL: Ultra-small initial timestep for solidification stability
-// With source terms and phase change, need extremely conservative start
-deltaT          1e-7;
+// Initial timestep for solidification (stable formulation allows larger dt)
+deltaT          1e-5;
 
 writeControl    adjustableRunTime;
 
@@ -461,22 +460,19 @@ timePrecision   6;
 
 runTimeModifiable yes;
 
-// Adaptive timestep control for stability
+// Adaptive timestep control
 adjustTimeStep  yes;
 
-// Very conservative Courant limits for solidification
-// Source terms require tighter stability constraints
-maxCo           0.1;
+// Courant limits for solidification with stable source terms
+maxCo           0.5;
 
-// Very conservative interface Courant for VOF stability
-maxAlphaCo      0.1;
+// Interface Courant for VOF stability
+maxAlphaCo      0.5;
 
-// Maximum timestep - limit for solidification simulations
-// Prevents missing solidification transients
-maxDeltaT       1e-4;
+// Maximum timestep - prevents missing transients
+maxDeltaT       0.01;
 
 // Maximum diffusion number for thermal stability
-// Critical with latent heat sources
 maxDi           10;
 
 // ************************************************************************* //
@@ -714,21 +710,21 @@ PIMPLE
     }}
 }}
 
-// Aggressive under-relaxation for solidification stability
-// Critical for handling latent heat and mushy zone sources
+// Under-relaxation for solidification stability
+// Stable source formulation allows more reasonable values
 relaxationFactors
 {{
     fields
     {{
-        p_rgh           0.5;
-        p               0.5;
+        p_rgh           0.7;
+        p               0.7;
     }}
 
     equations
     {{
-        U               0.5;
-        "(e|h|T)"       0.3;
-        ".*"            0.5;
+        U               0.7;
+        "(e|h|T)"       0.6;
+        ".*"            0.7;
     }}
 }}
 
@@ -838,7 +834,7 @@ thermoType
     type            heRhoThermo;
     mixture         pureMixture;
     transport       const;
-    thermo          janaf;
+    thermo          hConst;
     equationOfState rhoConst;
     specie          specie;
     energy          sensibleEnthalpy;
@@ -856,29 +852,8 @@ mixture
     }}
     thermodynamics
     {{
-        Tlow        298;
-        Thigh       2000;
-        Tcommon     933.47;
-        lowCpCoeffs
-        (
-            3.5975527e+00
-            -7.5258037e-03
-            1.8167697e-05
-            -1.1983386e-08
-            2.6685492e-12
-            -4.4030967e+03
-            2.9863235e+00
-        );
-        highCpCoeffs
-        (
-            2.8063068e+00
-            4.5416638e-04
-            -1.4954487e-07
-            2.3087899e-11
-            -1.3428869e-15
-            -3.8628130e+03
-            5.4171021e+00
-        );
+        Cp          {metal_specific_heat};
+        Hf          0;
     }}
     transport
     {{
@@ -912,7 +887,7 @@ thermoType
     type            heRhoThermo;
     mixture         pureMixture;
     transport       const;
-    thermo          janaf;
+    thermo          hConst;
     equationOfState perfectGas;
     specie          specie;
     energy          sensibleEnthalpy;
@@ -926,11 +901,8 @@ mixture
     }}
     thermodynamics
     {{
-        Tlow        200;
-        Thigh       5000;
-        Tcommon     1000;
-        highCpCoeffs (3.10383 0.00156927 -5.22523e-07 8.06527e-11 -4.60363e-15 -6892.54 5.21744);
-        lowCpCoeffs  (3.53318 7.81943e-05 5.77097e-07 6.68595e-10 -6.30433e-13 -6964.71 3.15336);
+        Cp          1005;
+        Hf          0;
     }}
     transport
     {{
@@ -1212,8 +1184,11 @@ solidificationHeat
         scalarField fl = (T.primitiveField() - Tsolidus) / (Tliquidus - Tsolidus);
         fl = max(min(fl, 1.0), 0.0);
 
-        // Solidification rate approximation
-        const scalar deltaT = mesh().time().deltaTValue();
+        // STABLE FORMULATION: Use characteristic solidification timescale
+        // instead of 1/deltaT which causes instability
+        // For aluminum die casting: typical solidification time ~1-10 seconds
+        const scalar tau = 5.0;  // Characteristic solidification time [s]
+        const scalar relax = 0.1;  // Under-relaxation factor for stability
 
         forAll(hSource, i)
         {{
@@ -1222,8 +1197,10 @@ solidificationHeat
                 if (T[i] < Tliquidus && T[i] > Tsolidus)
                 {{
                     // In mushy zone - add latent heat source
-                    // Negative because solidification releases heat
-                    hSource[i] -= rho * L * (1.0 - fl[i]) * V[i] / deltaT;
+                    // Source = rho * L * (solid_fraction) / tau * relax
+                    // Negative sign because solidification RELEASES heat (exothermic)
+                    scalar solidFraction = 1.0 - fl[i];
+                    hSource[i] -= relax * rho * L * solidFraction * V[i] / tau;
                 }}
             }}
         }}
@@ -1295,37 +1272,6 @@ mushyZoneDrag
     #{{
         // Do nothing
     #}};
-}}
-
-// ************************************************************************* //
-""",
-
-    "system/fvConstraints": """/*--------------------------------*- C++ -*----------------------------------*\
-| =========                 |                                                 |
-| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
-|  \\    /   O peration     | Version:  11                                    |
-|   \\  /    A nd           | Website:  www.openfoam.org                      |
-|    \\/     M anipulation  |                                                 |
-\*---------------------------------------------------------------------------*/
-FoamFile
-{{
-    version     2.0;
-    format      ascii;
-    class       dictionary;
-    location    "system";
-    object      fvConstraints;
-}}
-// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
-
-temperatureLimits
-{{
-    type            limitTemperature;
-    active          yes;
-
-    selectionMode   all;
-
-    min             200;    // Minimum physical temperature (K)
-    max             2000;   // Maximum (above Al boiling point at 2743 K)
 }}
 
 // ************************************************************************* //
