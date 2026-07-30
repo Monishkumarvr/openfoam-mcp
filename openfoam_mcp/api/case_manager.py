@@ -207,6 +207,7 @@ class CaseManager:
 
             self._create_block_mesh_dict_from_bounds(case_dir, box_min, box_max, mesh_refinement)
             self._create_snappy_dict(case_dir, stl_file.name, mesh_refinement, location_in_mesh)
+            self._add_patch_to_fields(case_dir, "casting", template_patch="walls")
 
             return {
                 "geometry_type": "stl_file",
@@ -235,6 +236,51 @@ class CaseManager:
 
         else:
             raise ValueError(f"Unsupported geometry type: {geometry_type}")
+
+    def _add_patch_to_fields(self, case_dir: Path, patch_name: str, template_patch: str = "walls"):
+        """Give every 0/ field a patchField entry for `patch_name`.
+
+        snappyHexMesh turns the STL surface into its own mesh patch, and
+        OpenFOAM aborts ("Cannot find patchField entry") unless each field
+        defines a condition for it. The STL surface is the casting/mold
+        interface, so it reuses whatever the background box's wall patch
+        already specifies for that field.
+        """
+        import re
+
+        field_dir = case_dir / "0"
+        if not field_dir.is_dir():
+            return
+
+        for field_file in sorted(field_dir.iterdir()):
+            if not field_file.is_file():
+                continue
+
+            content = field_file.read_text()
+            if re.search(rf'^\s*{re.escape(patch_name)}\s*$', content, flags=re.MULTILINE):
+                continue
+
+            match = re.search(
+                rf'^([ \t]*){re.escape(template_patch)}[ \t]*\r?\n[ \t]*\{{.*?\n[ \t]*\}}[ \t]*\r?\n',
+                content,
+                flags=re.MULTILINE | re.DOTALL
+            )
+            if not match:
+                logger.warning(
+                    f"No '{template_patch}' patch found in {field_file.name}; "
+                    f"skipping '{patch_name}' patchField"
+                )
+                continue
+
+            block = match.group(0)
+            new_block = re.sub(
+                rf'{re.escape(template_patch)}(\s*\r?\n)',
+                rf'{patch_name}\g<1>',
+                block,
+                count=1
+            )
+            content = content[:match.end()] + "\n" + new_block + content[match.end():]
+            field_file.write_text(content)
 
     def _is_binary_stl(self, stl_file: Path) -> bool:
         with open(stl_file, 'rb') as f:
