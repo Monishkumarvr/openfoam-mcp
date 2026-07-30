@@ -121,6 +121,25 @@ class OpenFOAMClient:
                     str(case_dir)
                 )
 
+        # Split the gate/vent patches out of the STL surface patch. Without
+        # this the cavity is sealed: no inlet for the metal, no outlet for the
+        # air it displaces.
+        topo_set_dict = case_dir / "system" / "topoSetDict"
+        create_patch_dict = case_dir / "system" / "createPatchDict"
+        if topo_set_dict.exists() and create_patch_dict.exists():
+            logger.info("Creating gate/vent patches")
+
+            topo_result = await self.run_command(["topoSet"], str(case_dir))
+            if topo_result["returncode"] != 0:
+                raise RuntimeError(f"topoSet failed: {topo_result['stderr']}")
+
+            patch_result = await self.run_command(
+                ["createPatch", "-overwrite"],
+                str(case_dir)
+            )
+            if patch_result["returncode"] != 0:
+                raise RuntimeError(f"createPatch failed: {patch_result['stderr']}")
+
         # Get mesh statistics
         check_mesh_result = await self.run_command(
             ["checkMesh"],

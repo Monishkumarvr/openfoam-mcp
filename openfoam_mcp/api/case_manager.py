@@ -138,7 +138,9 @@ class CaseManager:
         geometry_type: str,
         stl_path: Optional[str] = None,
         dimensions: Optional[Dict[str, float]] = None,
-        mesh_refinement: str = "medium"
+        mesh_refinement: str = "medium",
+        gate_point: Optional[List[float]] = None,
+        vent_point: Optional[List[float]] = None
     ) -> Dict[str, Any]:
         """Set up geometry for a case.
 
@@ -148,6 +150,10 @@ class CaseManager:
             stl_path: Path to STL file
             dimensions: Parametric dimensions
             mesh_refinement: Mesh refinement level
+            gate_point: Where metal enters, in meters. Defaults to the highest
+                point of the casting (gravity pour).
+            vent_point: Where displaced air escapes, in meters. Defaults to the
+                high point furthest from the gate.
 
         Returns:
             Dictionary with setup information
@@ -191,33 +197,55 @@ class CaseManager:
             scaled_min = tuple(v * scale for v in raw_min)
             scaled_max = tuple(v * scale for v in raw_max)
 
-            # Pad a background box around the (scaled) geometry so
-            # snappyHexMesh has room to castellate/snap to the STL surface.
-            # The STL is treated as a solid immersed in this box (matching
-            # the walls/inlet/outlet boundary patches the 0/* field
-            # templates expect), so locationInMesh must sit in the padding
-            # gap, strictly outside the STL's own bounding box on every
-            # axis -- guaranteeing it's outside the solid regardless of the
-            # STL's shape/convexity.
+            # The STL bounds the metal itself, so the fluid domain is the
+            # cavity INSIDE the surface -- meshing the space around it would
+            # simulate flow past the part instead of filling it. The
+            # background block only has to enclose the geometry; snappyHexMesh
+            # discards everything outside the surface, keeping the region that
+            # contains locationInMesh.
             extent = [scaled_max[i] - scaled_min[i] for i in range(3)]
-            pad = [max(e * 0.2, 0.01) for e in extent]
+            pad = [max(e * 0.05, 0.002) for e in extent]
             box_min = tuple(scaled_min[i] - pad[i] for i in range(3))
             box_max = tuple(scaled_max[i] + pad[i] for i in range(3))
-            location_in_mesh = tuple(box_min[i] + pad[i] / 2 for i in range(3))
 
-            self._create_block_mesh_dict_from_bounds(case_dir, box_min, box_max, mesh_refinement)
+            tris = self._read_stl_triangles(stl_file, scale)
+            location_in_mesh, clearance = self._find_interior_point(tris)
+            gate, vent = self._choose_gate_and_vent(tris, gate_point, vent_point)
+            patch_radius = max(extent) * 0.08
+            cell_size = self._background_cell_size(tris, box_min, box_max, mesh_refinement)
+            wall_thickness = self._characteristic_thickness(tris)
+
+            self._create_block_mesh_dict_from_bounds(
+                case_dir, box_min, box_max, mesh_refinement, cell_size=cell_size
+            )
             self._create_snappy_dict(case_dir, stl_file.name, mesh_refinement, location_in_mesh)
+            self._create_gate_vent_dicts(case_dir, gate, vent, patch_radius)
+
             self._add_patch_to_fields(case_dir, "casting", template_patch="walls")
+            self._add_patch_to_fields(case_dir, "gate", template_patch="inlet")
+            self._add_patch_to_fields(case_dir, "vent", template_patch="outlet")
+
+            gate_velocity = self._gate_inflow_velocity(tris, gate, patch_radius)
+            self._set_patch_vector(case_dir, "U", "gate", gate_velocity)
 
             return {
                 "geometry_type": "stl_file",
                 "stl_file": stl_file.name,
                 "unit_scale": unit_note,
+                "mesh_region": "interior (cavity inside the STL surface)",
                 "bounding_box_m": {"min": scaled_min, "max": scaled_max},
                 "location_in_mesh_m": location_in_mesh,
+                "interior_clearance_m": round(clearance, 5),
+                "wall_thickness_m": round(wall_thickness, 5),
+                "background_cell_size_m": round(cell_size, 5),
+                "gate_m": gate,
+                "gate_velocity_ms": tuple(round(v, 4) for v in gate_velocity),
+                "vent_m": vent,
                 "details": (
-                    f"STL imported ({unit_note}), background mesh + snappyHexMesh "
-                    f"configured with {mesh_refinement} refinement"
+                    f"STL imported ({unit_note}); meshing the cavity inside the "
+                    f"surface with {mesh_refinement} refinement, gate at "
+                    f"{tuple(round(v, 4) for v in gate)} and vent at "
+                    f"{tuple(round(v, 4) for v in vent)}"
                 )
             }
 
@@ -236,6 +264,316 @@ class CaseManager:
 
         else:
             raise ValueError(f"Unsupported geometry type: {geometry_type}")
+
+    def _read_stl_triangles(self, stl_file: Path, scale: float = 1.0):
+        """Return an (n, 3, 3) array of triangle vertices, scaled by `scale`."""
+        import numpy as np
+
+        verts = []
+        if self._is_binary_stl(stl_file):
+            with open(stl_file, 'rb') as f:
+                f.seek(80)
+                n_tris = struct.unpack('<I', f.read(4))[0]
+                for _ in range(n_tris):
+                    data = f.read(50)
+                    if len(data) < 50:
+                        break
+                    vals = struct.unpack('<12fH', data)
+                    verts.extend(vals[3:12])
+        else:
+            with open(stl_file, 'r', errors='ignore') as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) == 4 and parts[0] == 'vertex':
+                        verts.extend(float(p) for p in parts[1:4])
+
+        tris = np.array(verts, dtype=float).reshape(-1, 3, 3) * scale
+        if len(tris) == 0:
+            raise ValueError(f"No triangles found in STL file: {stl_file}")
+        return tris
+
+    def _points_inside_surface(self, tris, points):
+        """Boolean mask of which `points` lie inside the closed surface `tris`.
+
+        Casts a ray along +x from each point and counts surface crossings; an
+        odd count means the point is enclosed. Requires a watertight surface.
+        """
+        import numpy as np
+
+        a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]
+        ay, az = a[:, 1], a[:, 2]
+        by, bz = b[:, 1], b[:, 2]
+        cy, cz = c[:, 1], c[:, 2]
+        # Signed area of each triangle projected onto the yz plane. Zero means
+        # the triangle is edge-on to the ray and cannot be crossed.
+        denom = (by - ay) * (cz - az) - (cy - ay) * (bz - az)
+
+        result = np.zeros(len(points), dtype=bool)
+        for i, p in enumerate(points):
+            py, pz = p[1], p[2]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                u = ((py - ay) * (cz - az) - (pz - az) * (cy - ay)) / denom
+                v = ((pz - az) * (by - ay) - (py - ay) * (bz - az)) / denom
+            hit = (u >= 0) & (v >= 0) & (u + v <= 1) & np.isfinite(u) & np.isfinite(v)
+            if not hit.any():
+                continue
+            x_cross = (
+                a[hit, 0]
+                + u[hit] * (b[hit, 0] - a[hit, 0])
+                + v[hit] * (c[hit, 0] - a[hit, 0])
+            )
+            result[i] = (np.count_nonzero(x_cross > p[0]) % 2) == 1
+        return result
+
+    def _find_interior_point(self, tris, samples: int = 12):
+        """Find a well-clear point inside a closed surface.
+
+        Samples a grid across the bounding box, keeps the enclosed points and
+        returns whichever sits furthest from the surface, so snappyHexMesh's
+        locationInMesh lands solidly inside the cavity rather than in a thin
+        feature where a small perturbation could push it outside.
+        """
+        import numpy as np
+
+        pts = tris.reshape(-1, 3)
+        lo, hi = pts.min(axis=0), pts.max(axis=0)
+
+        axes = []
+        for k in range(3):
+            half = (hi[k] - lo[k]) / (2 * samples)
+            axes.append(np.linspace(lo[k] + half, hi[k] - half, samples))
+        grid = np.stack(np.meshgrid(*axes, indexing='ij'), axis=-1).reshape(-1, 3)
+        # Nudge off exact symmetry so rays don't graze shared triangle edges.
+        grid = grid + np.array([1e-7, 3e-7, 7e-7]) * (hi - lo)
+
+        inside = grid[self._points_inside_surface(tris, grid)]
+        if len(inside) == 0:
+            raise ValueError(
+                "Could not find a point inside the STL surface. The surface may "
+                "not be closed, or may be too thin for the sampling density."
+            )
+
+        # Clearance approximated as distance to the nearest triangle vertex.
+        d2 = ((inside[:, None, :] - pts[None, :, :]) ** 2).sum(axis=2).min(axis=1)
+        best = inside[int(np.argmax(d2))]
+        return tuple(float(v) for v in best), float(np.sqrt(d2.max()))
+
+    def _characteristic_thickness(self, tris) -> float:
+        """Approximate wall thickness of a closed surface as 2*volume/area.
+
+        A casting is mostly thin walls, so its bounding box says little about
+        the size cells need to be. This gives the scale that actually has to
+        be resolved: for a slab it returns the slab thickness exactly.
+        """
+        import numpy as np
+
+        a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]
+        area = 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1).sum()
+        volume = abs(np.einsum('ij,ij->i', a, np.cross(b, c)).sum() / 6.0)
+        if area <= 0:
+            raise ValueError("Degenerate STL surface: zero area")
+        return float(2.0 * volume / area)
+
+    def _background_cell_size(self, tris, box_min, box_max, mesh_refinement: str,
+                              max_cells: int = 4_000_000) -> float:
+        """Cell size for the background mesh, sized off the wall thickness.
+
+        Too coarse and snappyHexMesh cannot find a connected cavity at all --
+        the flood fill from locationInMesh collapses to a handful of cells.
+        """
+        cells_across = {
+            "coarse": 2,
+            "medium": 3,
+            "fine": 5,
+            "very_fine": 7,
+        }.get(mesh_refinement, 3)
+
+        thickness = self._characteristic_thickness(tris)
+        cell_size = thickness / cells_across
+
+        extent = [box_max[i] - box_min[i] for i in range(3)]
+        counts = [max(1, extent[i] / cell_size) for i in range(3)]
+        total = counts[0] * counts[1] * counts[2]
+        if total > max_cells:
+            cell_size *= (total / max_cells) ** (1.0 / 3.0)
+            logger.warning(
+                f"Background mesh capped at ~{max_cells:,} cells; "
+                f"cell size relaxed to {cell_size * 1000:.2f} mm"
+            )
+        return cell_size
+
+    def _choose_gate_and_vent(self, tris, gate_point=None, vent_point=None):
+        """Pick where metal enters (gate) and where air escapes (vent).
+
+        Gravity pouring defaults the gate to the highest point of the casting.
+        The cavity also needs somewhere for displaced air to leave, otherwise
+        filling stalls, so the vent defaults to the high point furthest
+        horizontally from the gate.
+        """
+        import numpy as np
+
+        centroids = tris.mean(axis=1)
+        z = centroids[:, 2]
+
+        if gate_point is None:
+            gate = centroids[int(np.argmax(z))]
+        else:
+            gate = np.asarray(gate_point, dtype=float)
+
+        if vent_point is None:
+            # Consider the upper quarter of the casting, then take the point
+            # furthest from the gate in plan view.
+            high = centroids[z >= (z.min() + 0.75 * (z.max() - z.min()))]
+            if len(high) == 0:
+                high = centroids
+            horiz = np.linalg.norm(high[:, :2] - gate[:2], axis=1)
+            vent = high[int(np.argmax(horiz))]
+        else:
+            vent = np.asarray(vent_point, dtype=float)
+
+        return tuple(float(v) for v in gate), tuple(float(v) for v in vent)
+
+    def _gate_inflow_velocity(self, tris, gate, radius: float, speed: float = 0.5):
+        """Velocity vector that pushes metal INTO the cavity at the gate.
+
+        The field templates hardcode an upward inlet velocity, which for a
+        gate sitting on the top surface would drive metal straight back out of
+        the domain. Use the local surface normal instead so the inflow points
+        inward wherever the gate ends up.
+        """
+        import numpy as np
+
+        a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]
+        normals = np.cross(b - a, c - a)
+
+        # Right-hand winding gives outward normals only if the surface is
+        # oriented consistently; a negative enclosed volume means it is flipped.
+        signed_volume = np.einsum('ij,ij->i', a, np.cross(b, c)).sum() / 6.0
+        outward = 1.0 if signed_volume > 0 else -1.0
+
+        centroids = tris.mean(axis=1)
+        near = np.linalg.norm(centroids - np.asarray(gate), axis=1) <= radius
+        if not near.any():
+            near = np.zeros(len(tris), dtype=bool)
+            near[int(np.argmin(np.linalg.norm(centroids - np.asarray(gate), axis=1)))] = True
+
+        mean_normal = normals[near].sum(axis=0)
+        norm = np.linalg.norm(mean_normal)
+        if norm == 0:
+            return (0.0, 0.0, -speed)
+
+        inward = -outward * mean_normal / norm
+        return tuple(float(v) for v in inward * speed)
+
+    def _set_patch_vector(self, case_dir: Path, field: str, patch: str, vector):
+        """Overwrite the uniform value of one patch in a vector field."""
+        import re
+
+        field_file = case_dir / "0" / field
+        if not field_file.exists():
+            return
+
+        content = field_file.read_text()
+        vec = f"({vector[0]:.6g} {vector[1]:.6g} {vector[2]:.6g})"
+        pattern = rf'(^[ \t]*{re.escape(patch)}[ \t]*\r?\n[ \t]*\{{.*?value[ \t]+uniform[ \t]+)\([^)]*\)'
+        new_content, n = re.subn(pattern, rf'\g<1>{vec}', content, count=1,
+                                 flags=re.MULTILINE | re.DOTALL)
+        if n:
+            field_file.write_text(new_content)
+
+    def _create_gate_vent_dicts(self, case_dir: Path, gate, vent, radius: float):
+        """Write topoSetDict/createPatchDict that carve gate and vent patches.
+
+        snappyHexMesh emits the whole STL surface as one patch, so the metal
+        has no way in and the air no way out. These dictionaries select the
+        casting faces near each point and split them into their own patches.
+        """
+        def box(centre):
+            lo = tuple(centre[i] - radius for i in range(3))
+            hi = tuple(centre[i] + radius for i in range(3))
+            return (f"({lo[0]} {lo[1]} {lo[2]}) ({hi[0]} {hi[1]} {hi[2]})")
+
+        actions = []
+        for set_name, centre in (("gateFaces", gate), ("ventFaces", vent)):
+            actions.append(f"""    {{
+        name    {set_name};
+        type    faceSet;
+        action  new;
+        source  patchToFace;
+        patch   casting;
+    }}
+    {{
+        name    {set_name};
+        type    faceSet;
+        action  subset;
+        source  boxToFace;
+        box     {box(centre)};
+    }}""")
+
+        topo_set = f"""/*--------------------------------*- C++ -*----------------------------------*\\
+| =========                 |                                                 |
+| \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\\\    /   O peration     | Version:  11                                    |
+|   \\\\  /    A nd           | Website:  www.openfoam.org                      |
+|    \\\\/     M anipulation  |                                                 |
+\\*---------------------------------------------------------------------------*/
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      topoSetDict;
+}}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+actions
+(
+{chr(10).join(actions)}
+);
+
+// ************************************************************************* //
+"""
+        (case_dir / "system" / "topoSetDict").write_text(topo_set)
+
+        create_patch = """/*--------------------------------*- C++ -*----------------------------------*\\
+| =========                 |                                                 |
+| \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\\\    /   O peration     | Version:  11                                    |
+|   \\\\  /    A nd           | Website:  www.openfoam.org                      |
+|    \\\\/     M anipulation  |                                                 |
+\\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      createPatchDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+pointSync false;
+
+patches
+(
+    {
+        name            gate;
+        patchInfo       { type patch; }
+        constructFrom   set;
+        set             gateFaces;
+    }
+    {
+        name            vent;
+        patchInfo       { type patch; }
+        constructFrom   set;
+        set             ventFaces;
+    }
+);
+
+// ************************************************************************* //
+"""
+        (case_dir / "system" / "createPatchDict").write_text(create_patch)
 
     def _add_patch_to_fields(self, case_dir: Path, patch_name: str, template_patch: str = "walls"):
         """Give every 0/ field a patchField entry for `patch_name`.
@@ -380,7 +718,8 @@ class CaseManager:
         case_dir: Path,
         box_min,
         box_max,
-        mesh_refinement: str
+        mesh_refinement: str,
+        cell_size: Optional[float] = None
     ):
         """Create a background blockMeshDict spanning the given bounds."""
         dimensions = {
@@ -388,14 +727,17 @@ class CaseManager:
             "width": box_max[1] - box_min[1],
             "height": box_max[2] - box_min[2],
         }
-        self._create_block_mesh_dict(case_dir, dimensions, mesh_refinement, origin=box_min)
+        self._create_block_mesh_dict(
+            case_dir, dimensions, mesh_refinement, origin=box_min, cell_size=cell_size
+        )
 
     def _create_block_mesh_dict(
         self,
         case_dir: Path,
         dimensions: Dict[str, float],
         mesh_refinement: str,
-        origin=(0.0, 0.0, 0.0)
+        origin=(0.0, 0.0, 0.0),
+        cell_size: Optional[float] = None
     ):
         """Create blockMeshDict file."""
         length = dimensions.get("length", 0.1)
@@ -413,9 +755,11 @@ class CaseManager:
 
         # Size cells off the largest dimension so the background mesh stays
         # roughly isotropic and the cell count stays bounded regardless of
-        # how big the geometry is.
-        largest = max(length, width, height)
-        cell_size = largest / cells_per_dim
+        # how big the geometry is. An explicit cell_size overrides this when
+        # the caller has sized it against the geometry itself.
+        if cell_size is None:
+            largest = max(length, width, height)
+            cell_size = largest / cells_per_dim
         nx = max(1, round(length / cell_size))
         ny = max(1, round(width / cell_size))
         nz = max(1, round(height / cell_size))
