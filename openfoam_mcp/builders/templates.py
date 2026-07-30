@@ -852,7 +852,7 @@ mixture
     }}
     thermodynamics
     {{
-        Cp          {metal_specific_heat};
+        Cp          {metal_cp};
         Hf          0;
     }}
     transport
