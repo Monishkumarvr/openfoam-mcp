@@ -1019,27 +1019,32 @@ FoamFile
 
 dimensions      [1 -1 -2 0 0 0 0];
 
-internalField   uniform 0;
+// compressibleVoF works in ABSOLUTE pressure: p = p_rgh + rho*g*h, and the gas
+// uses perfectGas (rho = p/(R*T)). Initialising p_rgh to 0 -- the relative
+// -pressure convention the incompressible solvers use -- starts the domain at a
+// near vacuum, collapsing the gas density and driving the energy equation to
+// negative temperatures within a few timesteps.
+internalField   uniform 101325;
 
 boundaryField
 {{
     walls
     {{
         type            fixedFluxPressure;
-        value           uniform 0;
+        value           uniform 101325;
     }}
 
     inlet
     {{
         type            fixedFluxPressure;
-        value           uniform 0;
+        value           uniform 101325;
     }}
 
     outlet
     {{
         type            totalPressure;
-        p0              uniform 0;
-        value           uniform 0;
+        p0              uniform 101325;
+        value           uniform 101325;
     }}
 }}
 
