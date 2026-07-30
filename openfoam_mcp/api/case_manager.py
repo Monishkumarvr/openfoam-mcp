@@ -3,6 +3,7 @@
 import os
 import json
 import shutil
+import struct
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -160,21 +161,63 @@ class CaseManager:
             if not stl_path:
                 raise ValueError("stl_path required for stl_file geometry type")
 
-            # Copy STL to case constant/triSurface directory
+            stl_file = Path(stl_path)
+            if not stl_file.exists():
+                raise ValueError(f"STL file not found: {stl_path}")
+
+            # Parse geometry bounds/centroid in the STL's native units, used to
+            # size the background mesh and pick a point outside the immersed
+            # solid for snappyHexMesh's locationInMesh.
+            raw_min, raw_max, _ = self._parse_stl_bounds_and_centroid(stl_file)
+            raw_extent = [raw_max[i] - raw_min[i] for i in range(3)]
+            max_extent = max(raw_extent)
+
+            # Heuristic: real castings run centimeters to ~1m across. A
+            # bounding box bigger than ~5 (native units) is almost certainly
+            # millimeters, not meters, so convert to meters (this codebase's
+            # templates assume SI/meters throughout).
+            if max_extent > 5:
+                scale = 0.001
+                unit_note = "assumed millimeters (bounding box > 5 units) -> scaled to meters"
+            else:
+                scale = 1.0
+                unit_note = "assumed already in meters"
+
             tri_surface_dir = case_dir / "constant" / "triSurface"
             tri_surface_dir.mkdir(parents=True, exist_ok=True)
-
-            stl_file = Path(stl_path)
             dest_stl = tri_surface_dir / stl_file.name
-            shutil.copy(stl_path, dest_stl)
+            self._write_scaled_stl(stl_file, dest_stl, scale)
 
-            # Create snappyHexMeshDict
-            self._create_snappy_dict(case_dir, stl_file.name, mesh_refinement)
+            scaled_min = tuple(v * scale for v in raw_min)
+            scaled_max = tuple(v * scale for v in raw_max)
+
+            # Pad a background box around the (scaled) geometry so
+            # snappyHexMesh has room to castellate/snap to the STL surface.
+            # The STL is treated as a solid immersed in this box (matching
+            # the walls/inlet/outlet boundary patches the 0/* field
+            # templates expect), so locationInMesh must sit in the padding
+            # gap, strictly outside the STL's own bounding box on every
+            # axis -- guaranteeing it's outside the solid regardless of the
+            # STL's shape/convexity.
+            extent = [scaled_max[i] - scaled_min[i] for i in range(3)]
+            pad = [max(e * 0.2, 0.01) for e in extent]
+            box_min = tuple(scaled_min[i] - pad[i] for i in range(3))
+            box_max = tuple(scaled_max[i] + pad[i] for i in range(3))
+            location_in_mesh = tuple(box_min[i] + pad[i] / 2 for i in range(3))
+
+            self._create_block_mesh_dict_from_bounds(case_dir, box_min, box_max, mesh_refinement)
+            self._create_snappy_dict(case_dir, stl_file.name, mesh_refinement, location_in_mesh)
 
             return {
                 "geometry_type": "stl_file",
                 "stl_file": stl_file.name,
-                "details": f"STL imported, snappyHexMesh configured with {mesh_refinement} refinement"
+                "unit_scale": unit_note,
+                "bounding_box_m": {"min": scaled_min, "max": scaled_max},
+                "location_in_mesh_m": location_in_mesh,
+                "details": (
+                    f"STL imported ({unit_note}), background mesh + snappyHexMesh "
+                    f"configured with {mesh_refinement} refinement"
+                )
             }
 
         elif geometry_type == "blockMesh":
@@ -193,11 +236,120 @@ class CaseManager:
         else:
             raise ValueError(f"Unsupported geometry type: {geometry_type}")
 
+    def _is_binary_stl(self, stl_file: Path) -> bool:
+        with open(stl_file, 'rb') as f:
+            if not f.read(80).lstrip().lower().startswith(b'solid'):
+                return True
+            # An ASCII header is not conclusive: binary STLs may also start
+            # with "solid". Confirm by checking the declared triangle count
+            # against the actual file size (84 + 50 bytes per triangle).
+            count_bytes = f.read(4)
+            if len(count_bytes) < 4:
+                return False
+            n_tris = struct.unpack('<I', count_bytes)[0]
+            return stl_file.stat().st_size == 84 + n_tris * 50
+
+    def _parse_stl_bounds_and_centroid(self, stl_file: Path):
+        """Return (min_xyz, max_xyz, centroid_xyz) of an STL in its native units."""
+        mins = [float('inf')] * 3
+        maxs = [float('-inf')] * 3
+        total = [0.0, 0.0, 0.0]
+        count = 0
+
+        def accumulate(x, y, z):
+            nonlocal count
+            for i, v in enumerate((x, y, z)):
+                if v < mins[i]:
+                    mins[i] = v
+                if v > maxs[i]:
+                    maxs[i] = v
+                total[i] += v
+            count += 1
+
+        if self._is_binary_stl(stl_file):
+            with open(stl_file, 'rb') as f:
+                f.seek(80)
+                n_tris = struct.unpack('<I', f.read(4))[0]
+                for _ in range(n_tris):
+                    data = f.read(50)
+                    if len(data) < 50:
+                        break
+                    vals = struct.unpack('<12fH', data)
+                    for v in range(3):
+                        accumulate(*vals[3 + v * 3: 6 + v * 3])
+        else:
+            with open(stl_file, 'r', errors='ignore') as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) == 4 and parts[0] == 'vertex':
+                        accumulate(float(parts[1]), float(parts[2]), float(parts[3]))
+
+        if count == 0:
+            raise ValueError(f"No vertices found in STL file: {stl_file}")
+
+        centroid = tuple(t / count for t in total)
+        return tuple(mins), tuple(maxs), centroid
+
+    def _write_scaled_stl(self, src: Path, dest: Path, scale: float):
+        """Copy an STL, scaling vertex coordinates by `scale`.
+
+        OpenFOAM works in meters; CAD exports are usually millimeters.
+        Scaling here (rather than via snappyHexMesh scaling knobs) keeps the
+        copied STL, the background mesh, and locationInMesh in one unit system.
+        """
+        if scale == 1.0:
+            shutil.copy(src, dest)
+            return
+
+        if self._is_binary_stl(src):
+            with open(src, 'rb') as fin, open(dest, 'wb') as fout:
+                header = fin.read(80)
+                count_bytes = fin.read(4)
+                fout.write(header)
+                fout.write(count_bytes)
+                n_tris = struct.unpack('<I', count_bytes)[0]
+                for _ in range(n_tris):
+                    data = fin.read(50)
+                    if len(data) < 50:
+                        break
+                    vals = list(struct.unpack('<12fH', data))
+                    # vals[0:3] is the unit normal - direction only, not scaled.
+                    for i in range(3, 12):
+                        vals[i] *= scale
+                    fout.write(struct.pack('<12fH', *vals))
+            return
+
+        with open(src, 'r', errors='ignore') as fin, open(dest, 'w') as fout:
+            for line in fin:
+                parts = line.split()
+                if len(parts) == 4 and parts[0] == 'vertex':
+                    indent = line[:len(line) - len(line.lstrip())]
+                    x, y, z = (float(p) * scale for p in parts[1:4])
+                    fout.write(f"{indent}vertex {x:.6e} {y:.6e} {z:.6e}\n")
+                else:
+                    fout.write(line)
+
+    def _create_block_mesh_dict_from_bounds(
+        self,
+        case_dir: Path,
+        box_min,
+        box_max,
+        mesh_refinement: str
+    ):
+        """Create a background blockMeshDict spanning the given bounds."""
+        dimensions = {
+            "length": box_max[0] - box_min[0],
+            "width": box_max[1] - box_min[1],
+            "height": box_max[2] - box_min[2],
+        }
+        self._create_block_mesh_dict(case_dir, dimensions, mesh_refinement, origin=box_min)
+
     def _create_block_mesh_dict(
         self,
         case_dir: Path,
         dimensions: Dict[str, float],
-        mesh_refinement: str
+        mesh_refinement: str,
+        origin=(0.0, 0.0, 0.0)
     ):
         """Create blockMeshDict file."""
         length = dimensions.get("length", 0.1)
@@ -213,9 +365,17 @@ class CaseManager:
         }
         cells_per_dim = refinement_map.get(mesh_refinement, 20)
 
-        nx = int(length / 0.01 * (cells_per_dim / 20))
-        ny = int(width / 0.01 * (cells_per_dim / 20))
-        nz = int(height / 0.01 * (cells_per_dim / 20))
+        # Size cells off the largest dimension so the background mesh stays
+        # roughly isotropic and the cell count stays bounded regardless of
+        # how big the geometry is.
+        largest = max(length, width, height)
+        cell_size = largest / cells_per_dim
+        nx = max(1, round(length / cell_size))
+        ny = max(1, round(width / cell_size))
+        nz = max(1, round(height / cell_size))
+
+        x0, y0, z0 = origin
+        x1, y1, z1 = x0 + length, y0 + width, z0 + height
 
         block_mesh_dict = f"""/*--------------------------------*- C++ -*----------------------------------*\\
 | =========                 |                                                 |
@@ -237,14 +397,14 @@ scale   1;
 
 vertices
 (
-    (0 0 0)
-    ({length} 0 0)
-    ({length} {width} 0)
-    (0 {width} 0)
-    (0 0 {height})
-    ({length} 0 {height})
-    ({length} {width} {height})
-    (0 {width} {height})
+    ({x0} {y0} {z0})
+    ({x1} {y0} {z0})
+    ({x1} {y1} {z0})
+    ({x0} {y1} {z0})
+    ({x0} {y0} {z1})
+    ({x1} {y0} {z1})
+    ({x1} {y1} {z1})
+    ({x0} {y1} {z1})
 );
 
 blocks
@@ -302,7 +462,8 @@ mergePatchPairs
         self,
         case_dir: Path,
         stl_name: str,
-        mesh_refinement: str
+        mesh_refinement: str,
+        location_in_mesh=(0.001, 0.001, 0.001)
     ):
         """Create snappyHexMeshDict file."""
         # This is a simplified version - would need more sophistication for production
@@ -313,6 +474,7 @@ mergePatchPairs
             "very_fine": (5, 5)
         }
         min_ref, max_ref = refinement_map.get(mesh_refinement, (3, 3))
+        loc_x, loc_y, loc_z = location_in_mesh
 
         snappy_dict = f"""/*--------------------------------*- C++ -*----------------------------------*\\
 | =========                 |                                                 |
@@ -336,7 +498,7 @@ addLayers       false;
 
 geometry
 {{
-    {stl_name}
+    "{stl_name}"
     {{
         type triSurfaceMesh;
         name casting;
@@ -359,7 +521,7 @@ castellatedMeshControls
     }}
     resolveFeatureAngle 30;
     refinementRegions   {{}}
-    locationInMesh (0.001 0.001 0.001);
+    locationInMesh ({loc_x} {loc_y} {loc_z});
     allowFreeStandingZoneFaces true;
 }}
 
