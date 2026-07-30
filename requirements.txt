@@ -1,6 +1,7 @@
 # Core dependencies
 mcp>=1.0.0
 loguru>=0.7.0
+numpy>=1.24.0
 
 # Optional: For advanced OpenFOAM parsing
 # PyFoam>=2022.9
