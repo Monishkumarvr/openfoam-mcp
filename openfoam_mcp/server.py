@@ -24,6 +24,7 @@ from .api.openfoam_client import OpenFOAMClient
 from .api.case_manager import CaseManager
 from .api.result_analyzer_real import RealResultAnalyzer  # REAL analyzer, not fake
 from .api.parametric_study import ParametricStudyEngine
+from .api.gating import GatingRecommender
 from .builders.case_builder import CaseBuilder
 
 # Configure logger
@@ -38,6 +39,7 @@ openfoam_client = OpenFOAMClient()
 case_manager = CaseManager()
 result_analyzer = RealResultAnalyzer()  # REAL analyzer with actual OpenFOAM parsing
 parametric_engine = ParametricStudyEngine()
+gating_recommender = GatingRecommender(case_manager=case_manager, analyzer=result_analyzer)
 
 
 @app.list_tools()
@@ -398,6 +400,39 @@ async def list_tools() -> list[Tool]:
                     }
                 },
                 "required": ["case_name", "optimization_metric"]
+            }
+        ),
+        Tool(
+            name="recommend_gating",
+            description="Recommend ingate/runner/sprue sizing and riser placement from the "
+                       "casting's real geometry, material properties and (if the case has "
+                       "been run) detected hotspots -- Chvorinov's rule + Campbell's critical "
+                       "ingate velocity, not a parametric search",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "case_name": {
+                        "type": "string",
+                        "description": "Case with STL geometry already set up (setup_geometry with geometry_type='stl_file')"
+                    },
+                    "mold_material": {
+                        "type": "string",
+                        "enum": ["sand", "ceramic", "metal", "graphite"],
+                        "description": "Overrides the mold material recorded at case creation, if given"
+                    },
+                    "gating_ratio": {
+                        "type": "string",
+                        "enum": ["1:2:2", "1:3:3", "1:1:3"],
+                        "default": "1:2:2",
+                        "description": "Sprue:runner:ingate area ratio for an unpressurised gating system"
+                    },
+                    "riser_safety_factor": {
+                        "type": "number",
+                        "default": 1.3,
+                        "description": "Riser modulus = this x the fed section's modulus (standard range 1.2-1.5)"
+                    }
+                },
+                "required": ["case_name"]
             }
         ),
         Tool(
@@ -969,6 +1004,11 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent | ImageCo
             return [TextContent(type="text", text=diagnostic)]
 
         elif name == "optimize_gating_system":
+            # NOTE: case_manager.optimize_gating() is a placeholder that
+            # returns fixed, fabricated numbers ("Configuration 1", 15.3%
+            # improvement) regardless of input -- it does not actually run
+            # anything. Use 'recommend_gating' for a real, geometry-based
+            # recommendation instead.
             case_name = arguments["case_name"]
             optimization_metric = arguments["optimization_metric"]
 
@@ -982,11 +1022,38 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent | ImageCo
 
             return [TextContent(
                 type="text",
-                text=f"🎯 Optimization Results for {case_name}\n\n"
+                text=f"⚠️ optimize_gating_system is a placeholder and does not run a real "
+                     f"optimization -- the numbers below are fixed dummy values, not a result "
+                     f"for {case_name}. Use 'recommend_gating' for a real recommendation.\n\n"
                      f"Objective: {optimization_metric}\n"
                      f"Best configuration: {result['best_config']}\n"
                      f"Improvement: {result['improvement']}%\n"
                      f"Iterations: {result['iterations']}"
+            )]
+
+        elif name == "recommend_gating":
+            case_name = arguments["case_name"]
+            mold_material = arguments.get("mold_material")
+            gating_ratio = arguments.get("gating_ratio", "1:2:2")
+            riser_safety_factor = arguments.get("riser_safety_factor", 1.3)
+
+            logger.info(f"Computing gating recommendation for {case_name}")
+
+            try:
+                result = await gating_recommender.recommend(
+                    case_name=case_name,
+                    mold_material=mold_material,
+                    gating_ratio=gating_ratio,
+                    riser_safety_factor=riser_safety_factor
+                )
+            except (ValueError, KeyError) as e:
+                return [TextContent(type="text", text=f"❌ {e}")]
+
+            import json as _json
+            return [TextContent(
+                type="text",
+                text=f"🎯 Gating recommendation for {case_name}\n\n"
+                     f"{_json.dumps(result, indent=2, default=str)}"
             )]
 
         elif name == "run_parametric_study":
