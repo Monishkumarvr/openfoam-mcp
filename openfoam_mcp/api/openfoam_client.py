@@ -151,6 +151,42 @@ class OpenFOAMClient:
 
         return stats
 
+    async def compute_gradient(self, case_name: str, field_name: str = 'T') -> Dict[str, Any]:
+        """Compute the real, mesh-based spatial gradient of a field.
+
+        Runs OpenFOAM's own 'grad' function object over every written time
+        directory, writing 'grad(<field_name>)' alongside the field it was
+        computed from. This is the correct replacement for differencing
+        field values in cell-storage order (which has no relationship to
+        physical space and was silently wrong).
+        """
+        case_dir = self.run_dir / case_name
+        return await self.run_command(
+            ["postProcess", "-func", f"'grad({field_name})'"],
+            str(case_dir)
+        )
+
+    async def compute_cell_centers(self, case_name: str, time: str = "0") -> Dict[str, Any]:
+        """Write cell-center coordinates (field 'C') into `time`.
+
+        Cell centers are static for these solvers (no mesh motion), so one
+        time is enough; downstream code reads it back at time 0 regardless
+        of which simulation time is being analysed.
+        """
+        case_dir = self.run_dir / case_name
+        return await self.run_command(
+            ["postProcess", "-func", "writeCellCentres", "-time", time],
+            str(case_dir)
+        )
+
+    async def compute_cell_volumes(self, case_name: str, time: str = "0") -> Dict[str, Any]:
+        """Write cell volumes (field 'Vc') into `time`. Static mesh, same as above."""
+        case_dir = self.run_dir / case_name
+        return await self.run_command(
+            ["postProcess", "-func", "writeCellVolumes", "-time", time],
+            str(case_dir)
+        )
+
     def _parse_mesh_stats(self, output: str) -> Dict[str, Any]:
         """Parse checkMesh output for statistics."""
         stats = {

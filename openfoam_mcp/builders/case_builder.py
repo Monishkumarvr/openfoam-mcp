@@ -67,26 +67,36 @@ class CaseBuilder:
             }
         }
 
+        # "htc" is the lumped wall heat-transfer coefficient (W/m^2K) used by
+        # the externalWallHeatFluxTemperature mold-wall BC: nominal, indicative
+        # values (natural convection + radiation to ambient for sand/ceramic;
+        # interfacial conduction for metal/graphite permanent molds), not
+        # measured for a specific mold. Overridable per case via
+        # setup_boundary_conditions(heat_transfer_coefficient=...).
         self.mold_database = {
             "sand": {
                 "density": 1600,
                 "thermal_conductivity": 1.0,
-                "specific_heat": 1000
+                "specific_heat": 1000,
+                "htc": 15
             },
             "ceramic": {
                 "density": 2000,
                 "thermal_conductivity": 1.5,
-                "specific_heat": 900
+                "specific_heat": 900,
+                "htc": 12
             },
             "metal": {
                 "density": 7800,
                 "thermal_conductivity": 50,
-                "specific_heat": 500
+                "specific_heat": 500,
+                "htc": 500
             },
             "graphite": {
                 "density": 2200,
                 "thermal_conductivity": 150,
-                "specific_heat": 700
+                "specific_heat": 700,
+                "htc": 300
             }
         }
 
@@ -146,7 +156,8 @@ class CaseBuilder:
                 mold_k=mold_props["thermal_conductivity"],
                 mold_cp=mold_props["specific_heat"],
                 mold_temp=573,  # Default mold temperature: 573 K (300°C) - typical for die casting
-                ambient_temp=300  # Ambient temperature: 300 K (27°C)
+                ambient_temp=300,  # Ambient temperature: 300 K (27°C)
+                mold_htc=mold_props.get("htc", 15)
             )
             files[file_path] = content
 

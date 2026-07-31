@@ -1120,7 +1120,19 @@ boundaryField
 {{
     walls
     {{
-        type            fixedValue;
+        // Extracts heat via q = h*(Ta - Tw) instead of pinning the wall at
+        // a fixed temperature (an infinite heat sink that never warms and
+        // artificially speeds up solidification everywhere uniformly).
+        // h/Ta default from the mold material's nominal properties and are
+        // overridable via setup_boundary_conditions(heat_transfer_coefficient=...,
+        // ambient_temperature=...).
+        type            externalWallHeatFluxTemperature;
+        mode            coefficient;
+        Ta              uniform {ambient_temp};
+        h               uniform {mold_htc};
+        thicknessLayers ();
+        kappaLayers     ();
+        kappaMethod     fluidThermo;
         value           uniform {mold_temp};
     }}
 

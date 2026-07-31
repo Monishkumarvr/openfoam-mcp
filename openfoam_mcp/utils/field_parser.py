@@ -91,11 +91,11 @@ class OpenFOAMFieldParser:
         if not field_path.exists():
             raise FileNotFoundError(f"Field file not found: {field_path}")
 
-        with open(field_path, 'r') as f:
-            content = f.read()
+        content, raw = self._read_field_file(field_path)
 
         # Parse FoamFile header
         foam_file = self._parse_foam_file_header(content)
+        is_binary = self._is_binary_format(foam_file)
 
         # Check if it's a scalar field
         if 'volScalarField' not in foam_file.get('class', ''):
@@ -105,7 +105,7 @@ class OpenFOAMFieldParser:
         dimensions = self._parse_dimensions(content)
 
         # Parse internal field
-        internal_field = self._parse_internal_field(content)
+        internal_field = self._parse_internal_field(content, raw if is_binary else None)
 
         # Parse boundary field
         boundary_field = self._parse_boundary_field(content)
@@ -143,14 +143,17 @@ class OpenFOAMFieldParser:
                 if alt_field_path.exists():
                     field_path = alt_field_path
 
-        with open(field_path, 'r') as f:
-            content = f.read()
+        if not field_path.exists():
+            raise FileNotFoundError(f"Field file not found: {field_path}")
+
+        content, raw = self._read_field_file(field_path)
 
         foam_file = self._parse_foam_file_header(content)
+        is_binary = self._is_binary_format(foam_file)
         dimensions = self._parse_dimensions(content)
 
         # Parse internal field (vectors)
-        internal_field = self._parse_vector_internal_field(content)
+        internal_field = self._parse_vector_internal_field(content, raw if is_binary else None)
         boundary_field = self._parse_boundary_field(content)
 
         return {
@@ -160,6 +163,31 @@ class OpenFOAMFieldParser:
             'class': foam_file.get('class', 'unknown'),
             'time': time
         }
+
+    def _read_field_file(self, field_path: Path) -> Tuple[str, bytes]:
+        """Read a field file, returning both a text view and the raw bytes.
+
+        OpenFOAM's default templates set writeFormat binary (see
+        builders/templates.py), which packs the internalField/boundaryField
+        numeric payload as raw IEEE-754 doubles rather than text -- opening
+        in text mode and decoding as UTF-8 raises UnicodeDecodeError as soon
+        as it hits one of those bytes. Every solidification-type case uses
+        binary format, so this was never actually readable before.
+
+        The file is always read as bytes, then decoded with latin-1, which
+        maps every byte 0-255 to one character and can never raise --
+        crucially, this keeps string index == byte index, so a regex match
+        position found in the decoded text can be used directly to slice
+        into `raw` for the binary payload. The FoamFile header, dimensions
+        and boundaryField block are genuine ASCII/text in both formats, so
+        parsing them via the same regexes as before is unaffected.
+        """
+        with open(field_path, 'rb') as f:
+            raw = f.read()
+        return raw.decode('latin-1'), raw
+
+    def _is_binary_format(self, foam_file: Dict[str, str]) -> bool:
+        return foam_file.get('format', '').strip().rstrip(';').strip() == 'binary'
 
     def _parse_foam_file_header(self, content: str) -> Dict[str, str]:
         """Parse FoamFile dictionary."""
@@ -187,10 +215,12 @@ class OpenFOAMFieldParser:
             return [int(d) for d in dims_str.split()]
         return [0, 0, 0, 0, 0, 0, 0]
 
-    def _parse_internal_field(self, content: str) -> np.ndarray:
+    def _parse_internal_field(self, content: str, raw: Optional[bytes] = None) -> np.ndarray:
         """Parse internalField for scalar values.
 
-        Handles both 'uniform' and 'nonuniform' formats.
+        Handles 'uniform', 'nonuniform' ASCII, and 'nonuniform' binary
+        (raw is the file's original bytes; only used when the FoamFile
+        header said format binary -- see _read_field_file).
         """
         # Try uniform first
         match = re.search(r'internalField\s+uniform\s+([-+]?[\d.eE]+)', content)
@@ -199,7 +229,18 @@ class OpenFOAMFieldParser:
             # For uniform, we don't know the size, return single value
             return np.array([value])
 
-        # Try nonuniform List<scalar>
+        if raw is not None:
+            match = re.search(r'internalField\s+nonuniform\s+List<scalar>\s*\n(\d+)\s*\n\(', content)
+            if match:
+                count = int(match.group(1))
+                start = match.end()  # latin-1 char index == byte index
+                data = raw[start:start + count * 8]
+                if len(data) == count * 8:
+                    return np.frombuffer(data, dtype='<f8', count=count).copy()
+                logger.warning("Binary scalar internalField payload truncated")
+                return np.array([])
+
+        # Try nonuniform List<scalar> (ASCII)
         match = re.search(r'internalField\s+nonuniform\s+List<scalar>\s*\n(\d+)\s*\(\s*((?:[-+]?[\d.eE]+\s*)+)\)',
                          content, re.DOTALL)
         if match:
@@ -212,15 +253,30 @@ class OpenFOAMFieldParser:
         logger.warning("Could not parse internalField")
         return np.array([])
 
-    def _parse_vector_internal_field(self, content: str) -> np.ndarray:
-        """Parse internalField for vector values."""
+    def _parse_vector_internal_field(self, content: str, raw: Optional[bytes] = None) -> np.ndarray:
+        """Parse internalField for vector values.
+
+        Handles 'uniform', 'nonuniform' ASCII, and 'nonuniform' binary (see
+        _parse_internal_field / _read_field_file for the binary approach).
+        """
         # Try uniform
         match = re.search(r'internalField\s+uniform\s+\(([-+\d.eE\s]+)\)', content)
         if match:
             values = [float(v) for v in match.group(1).split()]
             return np.array([values])
 
-        # Try nonuniform List<vector>
+        if raw is not None:
+            match = re.search(r'internalField\s+nonuniform\s+List<vector>\s*\n(\d+)\s*\n\(', content)
+            if match:
+                count = int(match.group(1))
+                start = match.end()
+                data = raw[start:start + count * 3 * 8]
+                if len(data) == count * 3 * 8:
+                    return np.frombuffer(data, dtype='<f8', count=count * 3).reshape(count, 3).copy()
+                logger.warning("Binary vector internalField payload truncated")
+                return np.array([])
+
+        # Try nonuniform List<vector> (ASCII)
         match = re.search(r'internalField\s+nonuniform\s+List<vector>\s*\n(\d+)\s*\(\s*(.*?)\s*\)',
                          content, re.DOTALL)
         if match:
@@ -272,26 +328,25 @@ class OpenFOAMFieldParser:
 
         return boundary_field
 
-    def get_cell_centers(self) -> np.ndarray:
+    def get_cell_centers(self, time: Optional[float] = None) -> np.ndarray:
         """Get cell center coordinates.
 
-        Reads from constant/polyMesh/C file if available.
+        `postProcess -func writeCellCentres` writes these as a regular
+        volVectorField named 'C' into a time directory (there is no
+        constant/polyMesh/C -- that path never exists, so this always
+        returned an empty array before). Cell centers are static for these
+        solvers (no mesh motion), so time 0 is enough once the function
+        object has been run.
 
         Returns:
-            Nx3 array of cell centers
+            Nx3 array of cell centers, or empty array if 'C' hasn't been
+            written yet (run OpenFOAMClient.compute_cell_centers first).
         """
-        c_file = self.case_dir / "constant" / "polyMesh" / "C"
-
-        if not c_file.exists():
-            # Try to generate with postProcess
-            logger.warning("Cell centers file not found. Run 'postProcess -func writeCellCentres'")
+        try:
+            return self.read_vector_field('C', time if time is not None else 0.0)['internal_field']
+        except FileNotFoundError:
+            logger.warning("Cell centers not found. Run 'postProcess -func writeCellCentres' first.")
             return np.array([])
-
-        # Read C file (similar to vector field)
-        with open(c_file, 'r') as f:
-            content = f.read()
-
-        return self._parse_vector_internal_field(content)
 
     def calculate_field_statistics(self, field_data: np.ndarray) -> Dict[str, float]:
         """Calculate statistics for a field.
@@ -319,21 +374,13 @@ class OpenFOAMFieldParser:
             'count': len(field_data)
         }
 
-    def calculate_gradient(self, field_data: np.ndarray, cell_centers: Optional[np.ndarray] = None) -> np.ndarray:
-        """Calculate gradient of scalar field.
-
-        Args:
-            field_data: Scalar field values
-            cell_centers: Cell center coordinates (if None, uses simple finite difference)
-
-        Returns:
-            Gradient magnitude at each cell
-        """
-        if cell_centers is not None and len(cell_centers) == len(field_data):
-            # Use actual geometry for gradient
-            # This is simplified - real implementation would use face values
-            gradient = np.gradient(field_data)
-            return np.abs(gradient)
-        else:
-            # Simple finite difference
-            return np.abs(np.gradient(field_data))
+    # NOTE: there used to be a calculate_gradient() here that called
+    # np.gradient() on field_data directly. That treats the array as if
+    # index i+1 were the physical neighbour of index i, but OpenFOAM cell
+    # numbering after snappyHexMesh has no such relationship to space -- it
+    # returned the difference between arbitrarily-adjacent cells, not a
+    # spatial gradient. There is no way to fix that without the mesh
+    # connectivity, so gradients are computed the correct way instead: via
+    # OpenFOAM's own postProcess 'grad(<field>)' function object (see
+    # OpenFOAMClient.compute_gradient), then read back with
+    # read_vector_field exactly like any other field.

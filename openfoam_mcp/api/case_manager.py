@@ -1151,7 +1151,8 @@ mergeTolerance 1e-6;
                 updated_files.append("0/U")
 
         # Update temperature field (0/T)
-        if any(k in kwargs for k in ["inlet_temperature", "mold_wall_temperature", "ambient_temperature"]):
+        if any(k in kwargs for k in ["inlet_temperature", "mold_wall_temperature",
+                                      "ambient_temperature", "heat_transfer_coefficient"]):
             t_file = case_dir / "0" / "T"
             if t_file.exists():
                 with open(t_file, 'r') as f:
@@ -1163,7 +1164,9 @@ mergeTolerance 1e-6;
 
                 if "mold_wall_temperature" in kwargs:
                     T_wall = validate_temperature(kwargs["mold_wall_temperature"], "mold_wall_temperature")
-                    # Update wall boundary condition
+                    # Update the wall BC's initial-guess value (the wall
+                    # itself extracts heat via externalWallHeatFluxTemperature,
+                    # not a fixed value, so this only seeds the solve).
                     content = self._update_boundary_value(content, "walls", T_wall)
 
                     # CRITICAL: Set internalField to mold temperature (domain starts at mold temp)
@@ -1186,6 +1189,10 @@ mergeTolerance 1e-6;
                 if "ambient_temperature" in kwargs:
                     T_ambient = validate_temperature(kwargs["ambient_temperature"], "ambient_temperature")
 
+                    # The mold wall extracts heat toward this ambient
+                    # temperature (Ta in externalWallHeatFluxTemperature).
+                    content = self._update_patch_key(content, "walls", "Ta", T_ambient)
+
                     # Update gas Tref to ambient temperature
                     # Gas properties reference ambient conditions
                     gas_path = case_dir / "constant" / "physicalProperties.gas"
@@ -1198,15 +1205,18 @@ mergeTolerance 1e-6;
                         if "constant/physicalProperties.gas" not in updated_files:
                             updated_files.append("constant/physicalProperties.gas")
 
+                if "heat_transfer_coefficient" in kwargs:
+                    h = kwargs["heat_transfer_coefficient"]
+                    if h <= 0:
+                        raise ValueError(f"heat_transfer_coefficient must be positive, got {h}")
+                    # Overrides the mold material's nominal h (see
+                    # CaseBuilder.mold_database) with a case-specific value.
+                    content = self._update_patch_key(content, "walls", "h", h)
+
                 with open(t_file, 'w') as f:
                     f.write(content)
-                updated_files.append("0/T")
-
-        # Update heat transfer coefficient if specified (would need mixed BC type)
-        if "heat_transfer_coefficient" in kwargs:
-            # This would require changing BC type to mixed or externalWallHeatFluxTemperature
-            # Skipping for now as it requires more complex BC modification
-            logger.warning("heat_transfer_coefficient specified but requires mixed BC type - not implemented yet")
+                if "0/T" not in updated_files:
+                    updated_files.append("0/T")
 
         logger.info(f"Boundary conditions configured for {case_name}: {updated_files}")
 
@@ -1235,6 +1245,22 @@ mergeTolerance 1e-6;
             return f"{match.group(1)}{value}{match.group(3)}"
 
         return re.sub(patch_pattern, replace_value, content, flags=re.DOTALL)
+
+    def _update_patch_key(self, content: str, patch_name: str, key: str, value) -> str:
+        """Update an arbitrary `key uniform X;` pair within one patch block.
+
+        _update_boundary_value only ever touches `value uniform X;`; BCs like
+        externalWallHeatFluxTemperature carry other keys in the same patch
+        (h, Ta) that need the identical scoped-to-this-patch treatment.
+        """
+        import re
+
+        patch_pattern = rf'({patch_name}\s*\{{[^}}]*?{re.escape(key)}\s+uniform\s+)[^;]+(;)'
+
+        def replace_value(match):
+            return f"{match.group(1)}{value}{match.group(2)}"
+
+        return re.sub(patch_pattern, replace_value, content, count=1, flags=re.DOTALL)
 
     async def get_case_status(self, case_name: str) -> Dict[str, Any]:
         """Get status of a case.
