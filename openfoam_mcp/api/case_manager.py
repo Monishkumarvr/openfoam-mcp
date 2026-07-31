@@ -946,7 +946,7 @@ snapControls
     nSmoothPatch 3;
     tolerance 2.0;
     nSolveIter 30;
-    nRelaxIter 5;
+    nRelaxIter 8;
 }}
 
 addLayersControls
@@ -969,6 +969,14 @@ addLayersControls
     nLayerIter 50;
 }}
 
+// minTetQuality 1e-30 (and the equally loose minTwist/minFaceWeight below
+// it) effectively disabled snappyHexMesh's own worst-cell rejection --
+// close to any sliver survived. That's the direct cause of the tiny
+// (~5e-6s) Courant-limited timestep measured on the STL cavity mesh: a
+// handful of near-degenerate cells set the solver's stable dt for the
+// whole domain. Tightened to the values used across OpenFOAM's own
+// tutorials (motorBike and others), which reject those cells during
+// snapping instead of leaving them for the solver to struggle with.
 meshQualityControls
 {{
     maxNonOrtho 65;
@@ -977,11 +985,11 @@ meshQualityControls
     maxConcave 80;
     minFlatness 0.5;
     minVol 1e-13;
-    minTetQuality 1e-30;
+    minTetQuality 1e-9;
     minArea -1;
-    minTwist 0.02;
+    minTwist 0.05;
     minDeterminant 0.001;
-    minFaceWeight 0.02;
+    minFaceWeight 0.05;
     minVolRatio 0.01;
     minTriangleTwist -1;
     nSmoothScale 4;

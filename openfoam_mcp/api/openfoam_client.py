@@ -107,7 +107,7 @@ class OpenFOAMClient:
 
                 # Run snappyHexMesh in parallel
                 mesh_result = await self.run_command(
-                    ["mpirun", "-np", str(num_processors), "snappyHexMesh", "-parallel", "-overwrite"],
+                    ["mpirun", "--use-hwthread-cpus", "-np", str(num_processors), "snappyHexMesh", "-parallel", "-overwrite"],
                     str(case_dir)
                 )
                 if mesh_result["returncode"] != 0:
@@ -356,12 +356,12 @@ method          scotch;
             if solver_app == "foamRun":
                 # For foamRun, -parallel goes after -solver
                 result = await self.run_command(
-                    ["mpirun", "-np", str(num_processors)] + solver_cmd + ["-parallel"],
+                    ["mpirun", "--use-hwthread-cpus", "-np", str(num_processors)] + solver_cmd + ["-parallel"],
                     str(case_dir)
                 )
             else:
                 result = await self.run_command(
-                    ["mpirun", "-np", str(num_processors), solver_app, "-parallel"],
+                    ["mpirun", "--use-hwthread-cpus", "-np", str(num_processors), solver_app, "-parallel"],
                     str(case_dir)
                 )
 
