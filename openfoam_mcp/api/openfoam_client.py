@@ -98,23 +98,28 @@ class OpenFOAMClient:
             logger.info("Running snappyHexMesh")
 
             if parallel:
+                self._write_decompose_par_dict(case_dir, num_processors)
+
                 # Decompose mesh
-                await self.run_command(
-                    ["decomposePar"],
-                    str(case_dir)
-                )
+                decompose_result = await self.run_command(["decomposePar"], str(case_dir))
+                if decompose_result["returncode"] != 0:
+                    raise RuntimeError(f"decomposePar failed: {decompose_result['stderr']}")
 
                 # Run snappyHexMesh in parallel
-                await self.run_command(
+                mesh_result = await self.run_command(
                     ["mpirun", "-np", str(num_processors), "snappyHexMesh", "-parallel", "-overwrite"],
                     str(case_dir)
                 )
+                if mesh_result["returncode"] != 0:
+                    raise RuntimeError(f"parallel snappyHexMesh failed: {mesh_result['stderr']}")
 
                 # Reconstruct mesh
-                await self.run_command(
+                reconstruct_result = await self.run_command(
                     ["reconstructParMesh", "-constant"],
                     str(case_dir)
                 )
+                if reconstruct_result["returncode"] != 0:
+                    raise RuntimeError(f"reconstructParMesh failed: {reconstruct_result['stderr']}")
             else:
                 await self.run_command(
                     ["snappyHexMesh", "-overwrite"],
@@ -150,6 +155,42 @@ class OpenFOAMClient:
         stats = self._parse_mesh_stats(check_mesh_result["stdout"])
 
         return stats
+
+    def _write_decompose_par_dict(self, case_dir: Path, num_processors: int):
+        """Write system/decomposeParDict for a parallel run.
+
+        Neither run_mesh_generation nor run_simulation previously wrote
+        this, so `decomposePar` had nothing to read and failed silently
+        (its return code was never checked either -- see the checks added
+        around every call site above). Always overwrites so a case
+        previously decomposed for a different processor count doesn't
+        leave a stale, mismatched dict behind.
+        """
+        content = f"""/*--------------------------------*- C++ -*----------------------------------*\\
+| =========                 |                                                 |
+| \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\\\    /   O peration     | Version:  11                                    |
+|   \\\\  /    A nd           | Website:  www.openfoam.org                      |
+|    \\\\/     M anipulation  |                                                 |
+\\*---------------------------------------------------------------------------*/
+FoamFile
+{{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      decomposeParDict;
+}}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+numberOfSubdomains {num_processors};
+
+method          scotch;
+
+// ************************************************************************* //
+"""
+        decompose_path = case_dir / "system" / "decomposeParDict"
+        decompose_path.write_text(content)
 
     async def compute_gradient(self, case_name: str, field_name: str = 'T') -> Dict[str, Any]:
         """Compute the real, mesh-based spatial gradient of a field.
@@ -300,11 +341,16 @@ class OpenFOAMClient:
             solver_cmd = [solver_app]
 
         if parallel:
+            self._write_decompose_par_dict(case_dir, num_processors)
+
             # Decompose case
-            await self.run_command(
-                ["decomposePar"],
-                str(case_dir)
-            )
+            decompose_result = await self.run_command(["decomposePar"], str(case_dir))
+            if decompose_result["returncode"] != 0:
+                return {
+                    "status": "failed",
+                    "stage": "decomposePar",
+                    "error": decompose_result["stderr"]
+                }
 
             # Run solver in parallel
             if solver_app == "foamRun":
@@ -319,22 +365,37 @@ class OpenFOAMClient:
                     str(case_dir)
                 )
 
+            if result["returncode"] != 0:
+                return {
+                    "status": "failed",
+                    "stage": "solve",
+                    "error": result["stderr"]
+                }
+
             # Reconstruct case
-            await self.run_command(
-                ["reconstructPar"],
-                str(case_dir)
-            )
+            reconstruct_result = await self.run_command(["reconstructPar"], str(case_dir))
+            if reconstruct_result["returncode"] != 0:
+                # The per-processor results still exist and are analysable;
+                # only the merge step failed, so report it but don't call
+                # the whole run a failure.
+                return {
+                    "status": "completed_unreconstructed",
+                    "final_time": end_time or "N/A",
+                    "output_dir": str(case_dir),
+                    "warning": f"reconstructPar failed: {reconstruct_result['stderr']}"
+                }
         else:
             result = await self.run_command(
                 solver_cmd,
                 str(case_dir)
             )
 
-        if result["returncode"] != 0:
-            return {
-                "status": "failed",
-                "error": result["stderr"]
-            }
+            if result["returncode"] != 0:
+                return {
+                    "status": "failed",
+                    "stage": "solve",
+                    "error": result["stderr"]
+                }
 
         return {
             "status": "completed",

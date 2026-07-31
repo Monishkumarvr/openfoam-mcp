@@ -606,14 +606,33 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent | ImageCo
                 num_processors=arguments.get("num_processors", 4)
             )
 
-            return [TextContent(
-                type="text",
-                text=f"✅ Simulation completed for {case_name}\n"
-                     f"Solver: {solver or 'auto-detected'}\n"
-                     f"Status: {result.get('status', 'completed')}\n"
-                     f"Final time: {result.get('final_time', 'N/A')}s\n"
-                     f"Output: {result.get('output_dir', 'N/A')}"
-            )]
+            status = result.get('status', 'unknown')
+            if status == 'failed':
+                text = (
+                    f"❌ Simulation failed for {case_name}\n"
+                    f"Solver: {solver or 'auto-detected'}\n"
+                    f"Stage: {result.get('stage', 'unknown')}\n"
+                    f"Error:\n{result.get('error', 'No error output captured')}"
+                )
+            elif status == 'completed_unreconstructed':
+                text = (
+                    f"⚠️ Simulation ran for {case_name} but reconstructPar failed\n"
+                    f"Solver: {solver or 'auto-detected'}\n"
+                    f"Final time: {result.get('final_time', 'N/A')}s\n"
+                    f"Warning: {result.get('warning', '')}\n"
+                    f"Per-processor results exist in {result.get('output_dir', 'N/A')} "
+                    f"but haven't been merged -- analysis tools expect the reconstructed case."
+                )
+            else:
+                text = (
+                    f"✅ Simulation completed for {case_name}\n"
+                    f"Solver: {solver or 'auto-detected'}\n"
+                    f"Status: {status}\n"
+                    f"Final time: {result.get('final_time', 'N/A')}s\n"
+                    f"Output: {result.get('output_dir', 'N/A')}"
+                )
+
+            return [TextContent(type="text", text=text)]
 
         elif name == "analyze_results":
             case_name = arguments["case_name"]
