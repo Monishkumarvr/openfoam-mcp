@@ -12,6 +12,7 @@ import numpy as np
 from loguru import logger
 
 from ..utils.field_parser import OpenFOAMFieldParser
+from ..materials.database import get_material
 from .openfoam_client import OpenFOAMClient
 
 
@@ -558,8 +559,16 @@ class RealResultAnalyzer:
         niyama_SI = G / np.sqrt(np.maximum(R, 1e-6))   # K s^0.5 / m
         niyama_mm = niyama_SI / 775.0                   # (K*s)^0.5 / mm (SI <-> mm/min conversion factor)
 
-        metal_type = self._read_case_metadata(case_name).get("metal_type", "steel")
-        threshold = self._niyama_threshold_mm(metal_type)
+        metadata = self._read_case_metadata(case_name)
+        metal_type = metadata.get("metal_type", "steel")
+        metal_grade = metadata.get("metal_grade")
+        if metal_grade:
+            try:
+                threshold = get_material(metal_grade)["niyama_threshold_mm"]
+            except KeyError:
+                threshold = self._niyama_threshold_mm(metal_type)
+        else:
+            threshold = self._niyama_threshold_mm(metal_type)
 
         below = niyama_mm < threshold
         total_metal_volume = V.sum()
@@ -577,6 +586,7 @@ class RealResultAnalyzer:
             "niyama_stats_K_s0.5_per_mm": ny_stats,
             "threshold_K_s0.5_per_mm": threshold,
             "metal_type": metal_type,
+            "metal_grade": metal_grade,
             "porous_volume_fraction_pct": risky_volume_pct,
             "still_liquid_volume_fraction_pct": profile["still_liquid_volume_fraction_pct"],
             "criterion": "Niyama Ny = G/sqrt(R), evaluated at solidus crossing",

@@ -64,6 +64,14 @@ async def list_tools() -> list[Tool]:
                         "enum": ["steel", "aluminum", "iron", "copper", "bronze"],
                         "description": "Type of metal being cast"
                     },
+                    "metal_grade": {
+                        "type": "string",
+                        "description": "Optional specific alloy grade for real per-grade "
+                                       "properties from the materials database (e.g. 'WCB', "
+                                       "'316', 'H13', 'gray_iron_class30', "
+                                       "'ductile_iron_80-55-06'). If omitted, uses a single "
+                                       "generic property set for metal_type instead."
+                    },
                     "pouring_temperature": {
                         "type": "number",
                         "description": "Pouring temperature in Celsius"
@@ -472,24 +480,34 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent | ImageCo
             case_name = arguments["case_name"]
             case_type = arguments["case_type"]
             metal_type = arguments["metal_type"]
+            metal_grade = arguments.get("metal_grade")
             pouring_temp = arguments["pouring_temperature"]
             mold_material = arguments.get("mold_material", "sand")
 
             logger.info(f"Creating casting case: {case_name} (type: {case_type})")
 
-            result = await case_manager.create_case(
-                case_name=case_name,
-                case_type=case_type,
-                metal_type=metal_type,
-                pouring_temperature=pouring_temp,
-                mold_material=mold_material
-            )
+            try:
+                result = await case_manager.create_case(
+                    case_name=case_name,
+                    case_type=case_type,
+                    metal_type=metal_type,
+                    pouring_temperature=pouring_temp,
+                    mold_material=mold_material,
+                    metal_grade=metal_grade
+                )
+            except KeyError as e:
+                # Raised by materials.database.get_material for an unknown
+                # metal_grade -- surface the list of valid grades rather
+                # than silently falling back to the wrong material.
+                return [TextContent(type="text", text=f"❌ {e}")]
 
             return [TextContent(
                 type="text",
                 text=f"✅ Created casting case: {case_name}\n"
                      f"Type: {case_type}\n"
-                     f"Metal: {metal_type} at {pouring_temp}°C\n"
+                     f"Metal: {metal_type}"
+                     + (f" ({metal_grade})" if metal_grade else "")
+                     + f" at {pouring_temp}°C\n"
                      f"Mold: {mold_material}\n"
                      f"Location: {result['path']}\n\n"
                      f"Next steps:\n"

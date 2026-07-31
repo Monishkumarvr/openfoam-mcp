@@ -1,7 +1,8 @@
 """Case builder for creating OpenFOAM case templates."""
 
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 from .templates import MOLD_FILLING_TEMPLATE, SOLIDIFICATION_TEMPLATE
+from ..materials.database import get_material
 
 
 class CaseBuilder:
@@ -15,6 +16,7 @@ class CaseBuilder:
         """
         self.case_type = case_type
         self.metal_type = None
+        self.metal_grade = None
         self.pouring_temperature = None
         self.mold_material = None
 
@@ -104,6 +106,17 @@ class CaseBuilder:
         """Set metal type."""
         self.metal_type = metal_type
 
+    def set_metal_grade(self, metal_grade: Optional[str]):
+        """Set a specific alloy grade (e.g. 'WCB', 'ductile_iron_80-55-06').
+
+        When set, build() uses this grade's properties from
+        materials.database instead of the generic 5-entry metal_database
+        below. metal_type is still required (it selects which case
+        template to build) but no longer determines the actual material
+        properties once a grade is given.
+        """
+        self.metal_grade = metal_grade
+
     def set_pouring_temperature(self, temperature: float):
         """Set pouring temperature in Celsius."""
         self.pouring_temperature = temperature
@@ -120,8 +133,15 @@ class CaseBuilder:
         """
         files = {}
 
-        # Get material properties
-        metal_props = self.metal_database.get(self.metal_type, self.metal_database["steel"])
+        # Get material properties. A specific grade (e.g. 'WCB',
+        # 'gray_iron_class30') pulls from the sourced materials database;
+        # otherwise fall back to the generic per-family table below, which
+        # only covers steel/aluminum/iron/copper/bronze at a single
+        # representative point each.
+        if self.metal_grade:
+            metal_props = get_material(self.metal_grade)
+        else:
+            metal_props = self.metal_database.get(self.metal_type, self.metal_database["steel"])
         mold_props = self.mold_database.get(self.mold_material, self.mold_database["sand"])
 
         # Calculate kinematic viscosity (nu = mu / rho)

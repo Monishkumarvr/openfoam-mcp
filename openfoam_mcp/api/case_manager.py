@@ -45,16 +45,24 @@ class CaseManager:
         case_type: str,
         metal_type: str,
         pouring_temperature: float,
-        mold_material: str = "sand"
+        mold_material: str = "sand",
+        metal_grade: Optional[str] = None
     ) -> Dict[str, Any]:
         """Create a new OpenFOAM case.
 
         Args:
             case_name: Name for the case
             case_type: Type of casting simulation
-            metal_type: Type of metal
+            metal_type: Type of metal (selects the case template; still
+                required even when metal_grade is given)
             pouring_temperature: Pouring temperature in Celsius
             mold_material: Mold material
+            metal_grade: Specific alloy grade (e.g. 'WCB', 'CF8M',
+                'ductile_iron_80-55-06') looked up from materials.database
+                for real per-grade properties. See
+                openfoam_mcp.materials.database.list_grades() for all
+                available grades. If omitted, falls back to a single
+                generic property set per metal_type.
 
         Returns:
             Dictionary with case information
@@ -64,6 +72,20 @@ class CaseManager:
         if case_dir.exists():
             raise ValueError(f"Case {case_name} already exists")
 
+        # Build case files BEFORE touching the filesystem. build() raises
+        # KeyError for an unknown metal_grade -- validating first means a
+        # typo'd grade name leaves nothing behind, instead of the same
+        # stale half-created-directory problem an earlier bug in this
+        # session hit (a case that "exists" per case_dir.exists() but was
+        # never actually populated, blocking every retry until removed by
+        # hand).
+        builder = CaseBuilder(case_type)
+        builder.set_metal_type(metal_type)
+        builder.set_metal_grade(metal_grade)
+        builder.set_pouring_temperature(pouring_temperature)
+        builder.set_mold_material(mold_material)
+        case_files = builder.build()
+
         logger.info(f"Creating case: {case_name} at {case_dir}")
 
         # Create case directory structure
@@ -71,15 +93,6 @@ class CaseManager:
         (case_dir / "0").mkdir()
         (case_dir / "constant").mkdir()
         (case_dir / "system").mkdir()
-
-        # Use CaseBuilder to create appropriate template
-        builder = CaseBuilder(case_type)
-        builder.set_metal_type(metal_type)
-        builder.set_pouring_temperature(pouring_temperature)
-        builder.set_mold_material(mold_material)
-
-        # Build case files
-        case_files = builder.build()
 
         # Write files to case directory
         for file_path, content in case_files.items():
@@ -94,6 +107,7 @@ class CaseManager:
             "name": case_name,
             "type": case_type,
             "metal_type": metal_type,
+            "metal_grade": metal_grade,
             "pouring_temperature": pouring_temperature,
             "mold_material": mold_material,
             "created": datetime.now().isoformat(),
