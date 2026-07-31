@@ -219,13 +219,17 @@ class CaseManager:
                 case_dir, box_min, box_max, mesh_refinement, cell_size=cell_size
             )
             self._create_snappy_dict(case_dir, stl_file.name, mesh_refinement, location_in_mesh)
-            self._create_gate_vent_dicts(case_dir, gate, vent, patch_radius)
+            gate_normal = self._outward_normal_at(tris, gate, patch_radius)
+            vent_normal = self._outward_normal_at(tris, vent, patch_radius)
+            self._create_gate_vent_dicts(
+                case_dir, gate, vent, patch_radius, gate_normal, vent_normal
+            )
 
             self._add_patch_to_fields(case_dir, "casting", template_patch="walls")
             self._add_patch_to_fields(case_dir, "gate", template_patch="inlet")
             self._add_patch_to_fields(case_dir, "vent", template_patch="outlet")
 
-            gate_velocity = self._gate_inflow_velocity(tris, gate, patch_radius)
+            gate_velocity = self._gate_inflow_velocity(gate_normal)
             self._set_patch_vector(case_dir, "U", "gate", gate_velocity)
 
             return {
@@ -433,14 +437,8 @@ class CaseManager:
 
         return tuple(float(v) for v in gate), tuple(float(v) for v in vent)
 
-    def _gate_inflow_velocity(self, tris, gate, radius: float, speed: float = 0.5):
-        """Velocity vector that pushes metal INTO the cavity at the gate.
-
-        The field templates hardcode an upward inlet velocity, which for a
-        gate sitting on the top surface would drive metal straight back out of
-        the domain. Use the local surface normal instead so the inflow points
-        inward wherever the gate ends up.
-        """
+    def _outward_normal_at(self, tris, point, radius: float):
+        """Mean outward unit normal of the surface near `point`."""
         import numpy as np
 
         a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]
@@ -452,18 +450,26 @@ class CaseManager:
         outward = 1.0 if signed_volume > 0 else -1.0
 
         centroids = tris.mean(axis=1)
-        near = np.linalg.norm(centroids - np.asarray(gate), axis=1) <= radius
+        distance = np.linalg.norm(centroids - np.asarray(point), axis=1)
+        near = distance <= radius
         if not near.any():
             near = np.zeros(len(tris), dtype=bool)
-            near[int(np.argmin(np.linalg.norm(centroids - np.asarray(gate), axis=1)))] = True
+            near[int(np.argmin(distance))] = True
 
-        mean_normal = normals[near].sum(axis=0)
+        mean_normal = outward * normals[near].sum(axis=0)
         norm = np.linalg.norm(mean_normal)
         if norm == 0:
-            return (0.0, 0.0, -speed)
+            return np.array([0.0, 0.0, 1.0])
+        return mean_normal / norm
 
-        inward = -outward * mean_normal / norm
-        return tuple(float(v) for v in inward * speed)
+    def _gate_inflow_velocity(self, normal, speed: float = 0.5):
+        """Velocity that pushes metal INTO the cavity, opposite the outward normal.
+
+        The field templates hardcode an upward inlet velocity, which for a gate
+        sitting on the top surface would drive metal straight back out of the
+        domain.
+        """
+        return tuple(float(v) for v in -normal * speed)
 
     def _set_patch_vector(self, case_dir: Path, field: str, patch: str, vector):
         """Overwrite the uniform value of one patch in a vector field."""
@@ -481,12 +487,20 @@ class CaseManager:
         if n:
             field_file.write_text(new_content)
 
-    def _create_gate_vent_dicts(self, case_dir: Path, gate, vent, radius: float):
+    def _create_gate_vent_dicts(self, case_dir: Path, gate, vent, radius: float,
+                                gate_normal=None, vent_normal=None,
+                                cos_tolerance: float = 0.5):
         """Write topoSetDict/createPatchDict that carve gate and vent patches.
 
         snappyHexMesh emits the whole STL surface as one patch, so the metal
         has no way in and the air no way out. These dictionaries select the
         casting faces near each point and split them into their own patches.
+
+        Selecting purely by bounding box would sweep up every face in the box
+        whatever way it points, so on a curved surface part of the "inlet"
+        faces away from the flow and quietly leaks metal back out. Restricting
+        to faces whose normal lines up with the local surface normal keeps each
+        patch to one coherent opening.
         """
         def box(centre):
             lo = tuple(centre[i] - radius for i in range(3))
@@ -494,7 +508,10 @@ class CaseManager:
             return (f"({lo[0]} {lo[1]} {lo[2]}) ({hi[0]} {hi[1]} {hi[2]})")
 
         actions = []
-        for set_name, centre in (("gateFaces", gate), ("ventFaces", vent)):
+        for set_name, centre, normal in (
+            ("gateFaces", gate, gate_normal),
+            ("ventFaces", vent, vent_normal),
+        ):
             actions.append(f"""    {{
         name    {set_name};
         type    faceSet;
@@ -508,6 +525,15 @@ class CaseManager:
         action  subset;
         source  boxToFace;
         box     {box(centre)};
+    }}""")
+            if normal is not None:
+                actions.append(f"""    {{
+        name    {set_name};
+        type    faceSet;
+        action  subset;
+        source  normalToFace;
+        normal  ({normal[0]:.6g} {normal[1]:.6g} {normal[2]:.6g});
+        cos     {cos_tolerance};
     }}""")
 
         topo_set = f"""/*--------------------------------*- C++ -*----------------------------------*\\
